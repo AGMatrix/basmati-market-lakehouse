@@ -12,7 +12,7 @@ Status legend: ✅ verified by a live call or official page · ⚠️ partly ver
 | Key | Free signup at data.gov.in → "My Account" → API key. A shared demo key exists but is capped (reported: 10 records/call) — not usable for "all commodities". |
 | Rate limits | Not documented on any page I could reach. Will be measured empirically and the client will throttle conservatively. |
 | Fields (per listings) | state, district, market, commodity, variety, grade, arrival_date, min_price, max_price, modal_price (Rs/quintal). Arrivals (tonnes) are **not** in this resource. |
-| Access | **Geo-blocked: loads from India, not from the US (confirmed by user 2026-11-12).** Ingestion supports an optional India proxy via `AGMARKNET_PROXY`. |
+| Access | **Geo-blocked: loads from India, not from the US (confirmed by user 2026-11-12).** Ingestion supports an optional India proxy via `AGMARKNET_PROXY`. **API also blocked:** on 2026-11-13, `api.data.gov.in` (164.100.61.198:443) refused TCP connections from the US while other sites worked, so ingestion must egress from India. |
 | Could not verify from here | data.gov.in returned HTTP 403 / connection refused to my fetcher, and a direct shell probe was blocked. **You need to sign up for a key and run the probe script (`scripts/probe_sources.py`) yourself.** |
 
 **History options (pick one — see recommendation):**
