@@ -16,7 +16,7 @@ Mac (Airflow/Spark/MinIO)  --ssh -D 1080-->  EC2 t4g.micro, Mumbai  --HTTPS-->  
 1. Use a **dedicated IAM user/profile** (e.g. `basmati`) with EC2 permissions plus `ssm:GetParameter`. Do not use a production admin key.
    `aws configure --profile basmati`
 2. In the Billing console, create a **$1 budget alert** (AWS Budgets) before launching anything.
-3. Check what your account's free tier covers in the Billing → Free Tier page. Accounts created after 15 Jul 2025 are on the credit-based Free plan; older accounts have the 12-month free tier. Choose `INSTANCE_TYPE` accordingly (`t4g.micro` default; `t3.micro` also works).
+3. Check what your account's free tier covers in the Billing → Free Tier page. Accounts created after 15 Jul 2025 are on the credit-based Free plan; older accounts have the 12-month free tier. Choose `INSTANCE_TYPE` accordingly (`t4g.micro` default; on the legacy 12-month tier use `INSTANCE_TYPE=t2.micro`, which is free-tier eligible in Mumbai). The script picks the arm64 or amd64 Ubuntu image to match.
 4. `AWS_PROFILE=basmati scripts/aws_india_proxy.sh up`
 
 ## Daily use

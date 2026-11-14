@@ -16,7 +16,9 @@ export AWS_REGION="${AWS_REGION:-ap-south-1}"
 NAME=basmati-india-proxy
 KEY_FILE="$HOME/.ssh/${NAME}.pem"
 INSTANCE_TYPE="${INSTANCE_TYPE:-t4g.micro}"
-AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+# Graviton families (t4g, m7g, ...) need an arm64 image; everything else (t2, t3, ...) needs amd64.
+if [[ "$INSTANCE_TYPE" =~ ^[a-z]+[0-9]+g[a-z]*\. ]]; then ARCH=arm64; else ARCH=amd64; fi
+AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/$ARCH/hvm/ebs-gp3/ami-id
 
 instance_id() {
   aws ec2 describe-instances \

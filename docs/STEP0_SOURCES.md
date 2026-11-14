@@ -2,7 +2,7 @@
 
 Status legend: ✅ verified by a live call or official page · ⚠️ partly verified · ❌ blocked / not usable as-is
 
-## 1. Agmarknet daily mandi prices (data.gov.in) — ⚠️
+## 1. Agmarknet daily mandi prices (data.gov.in) — ✅ (probed 2026-11-13 from AWS Mumbai)
 
 | Item | Finding |
 |---|---|
@@ -14,6 +14,19 @@ Status legend: ✅ verified by a live call or official page · ⚠️ partly ver
 | Fields (per listings) | state, district, market, commodity, variety, grade, arrival_date, min_price, max_price, modal_price (Rs/quintal). Arrivals (tonnes) are **not** in this resource. |
 | Access | **Geo-blocked: loads from India, not from the US (confirmed by user 2026-11-12).** Ingestion supports an optional India proxy via `AGMARKNET_PROXY`. **API also blocked:** on 2026-11-13, `api.data.gov.in` (164.100.61.198:443) refused TCP connections from the US while other sites worked, so ingestion must egress from India. |
 | Could not verify from here | data.gov.in returned HTTP 403 / connection refused to my fetcher, and a direct shell probe was blocked. **You need to sign up for a key and run the probe script (`scripts/probe_sources.py`) yourself.** |
+
+**Probe results (2026-11-13, from an EC2 instance in ap-south-1, `scripts/probe_sources.py`):**
+
+| Resource | id | Total rows | Fields | Date filter |
+|---|---|---|---|---|
+| Current Daily Price… (Mandi) | `9ef84268-d588-465a-a308-a864a43d0070` | 17,636 (today only) | lower-case: state, district, market, commodity, variety, grade, arrival_date (dd/mm/yyyy), min/max/modal_price (ints) | `filters[arrival_date]=01/09/2023` → 0 (no history, as expected) |
+| Variety-wise Daily Market Prices | `35985678-0d79-46b4-9ed6-6f13308a1d24` | 83,049,851 | Title-case: Arrival_Date, Commodity, **Commodity_Code**, District, Grade, Market, Min/Max/Modal_Price (**strings**), State, Variety | `filters[Arrival_Date]=01/09/2023` → 13,515 rows ✅ |
+
+- **History option A confirmed** → use the variety-wise resource for backfill and the current resource for the daily run. Both lack arrivals (tonnes).
+- The two resources differ in field-name case and price types; the bronze→silver step must normalise both.
+- All three date spellings returned the same 13,515 rows, so the filter parses dates leniently; the client will send `dd/mm/yyyy` and assert returned `Arrival_Date` matches.
+- **api.data.gov.in stalls with no response on the default `Python-urllib` User-Agent** (60 s read timeout), while `curl` and any custom UA answer in ~0.3 s. Every client must set a User-Agent.
+- Latency from Mumbai: 0.3–1.0 s per call.
 
 **History options (pick one — see recommendation):**
 - **A. data.gov.in "Variety-wise Daily Market Prices Data of Commodity"** — https://www.data.gov.in/resource/variety-wise-daily-market-prices-data-commodity . Same Agmarknet source, includes `arrival_date`; third-party projects report history back to ~2010 and a date filter. *Unverified* — needs your key. **Recommended first try.**
