@@ -34,6 +34,9 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
   - *Local filesystem:* hides every object-store issue.
   - *Real S3:* request and storage costs, and egress fees when Spark reads from my Mac.
 - **Tradeoff:** MinIO doesn't reproduce S3 latency or throttling.
+- **Update 2026-11-13: built from source.** MinIO stopped publishing community images in late 2025 and archived `minio/minio` and `minio/mc` on GitHub. `docker/minio/Dockerfile` compiles the last release (`RELEASE.2025-10-15T17-29-55Z`) in a multi-stage build: a Go builder stage, then a ~30 MB Alpine runtime with a non-root user and a health check. The tag is checked against its commit SHA, because tags can be moved and commits can't.
+  - **Rejected:** RustFS (MinIO-compatible, but only reached 1.0 in Oct 2026), Garage (needs a layout/key init step), SeaweedFS (heavier S3 credential config).
+  - **Tradeoff:** an archived project gets no security fixes. Acceptable for a localhost-only dev store (ports bound to 127.0.0.1). The pipeline only uses the S3 API, so swapping to RustFS/Garage or real S3 is a config change.
 
 ## 5. Raw zone: immutable source JSON under `raw/agmarknet/dt=YYYY-MM-DD/`, overwritten per day
 - **Why:** the raw response is the audit trail and makes replay possible. If a transform bug is found, I re-run Spark without re-calling a rate-limited, geo-blocked API. Writing the whole `dt=` partition (write to a temporary prefix, then swap) makes a re-run idempotent: same day in, same files out, no duplicates.
@@ -45,6 +48,8 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
 ## 6. Processing: Spark 4 (PySpark)
 - **Why:** most mature engine for **writing** Iceberg (`MERGE INTO`, partition overwrite, schema evolution), plus job-description signal.
 - **Rejected:** DuckDB / Polars / pandas for the transform.
+- **Version: Spark 4.1.4, not 4.2/4.3.** Iceberg 1.12.0 (latest) publishes `iceberg-spark-runtime` only for Spark 4.0 and 4.1. The table format decides the engine version, not the other way round.
+- **Deployment: local mode inside the Airflow image.** Java and PySpark are installed in the Airflow image and the job runs in the task process. No Spark master/worker containers to keep in sync; for real scale the same job would run with `spark-submit` against a cluster.
 - **Honest tradeoff (say this in interviews):** I'll measure the volume. If it's tens of millions of rows or fewer, a single-node engine like DuckDB could do this transform faster on a laptop. I used Spark to demonstrate the distributed-write path (Iceberg commits, partitioning, tuning), and I'd keep it only if data or concurrency outgrew one node. The before/after optimisation metric must come from a real measured change: partition pruning, AQE, shuffle partitions, file sizing.
 
 ## 7. Table format: Apache Iceberg (fallback: partitioned Parquet)
@@ -136,5 +141,10 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
 - **Rejected:** IMD gridded rainfall (more authoritative, but binary grids and heavier processing).
 - **Tradeoff:** reanalysis data at one point per district is an approximation of field conditions.
 
-## 19. DuckDB 1.5.x, not 2.0 *(pending your decision)*
+## 19. DuckDB 1.5.6, not 2.0
 - **Why:** the spec says 1.x, and dbt-duckdb currently pins DuckDB 1.5.x in its extras. The Iceberg and REST-catalog extensions are proven on 1.x. 2.0 is brand-new, so I'd upgrade only after the pipeline works.
+
+## 20. Dependency pinning: exact versions + a 14-day cooldown
+- **Why:** reproducible builds, and protection against a freshly published malicious or broken release. `uv.lock` pins every Python package; `[tool.uv] exclude-newer` makes the resolver ignore anything published after a fixed date (moved forward deliberately). Docker base images are pinned to exact tags, and the MinIO source to a commit SHA.
+- **Consequence:** Airflow is 3.3.2, not 3.4.0 (released 2026-11-06); bump after 2026-11-20.
+- **Tradeoff:** security fixes arrive up to two weeks late unless I bump on purpose.
