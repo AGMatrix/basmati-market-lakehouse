@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://api.data.gov.in/resource/"
-# api.data.gov.in stalls (no response) on the default "Python-urllib" User-Agent; any custom one works.
+# api.data.gov.in never answers the default "Python-urllib" User-Agent; any custom one works.
 HEADERS = {"User-Agent": "basmati-lakehouse-probe/0.1"}
 HISTORY_DAYS = ("01/09/2023", "2023-09-01", "01-09-2023")  # formats differ between resources
 
@@ -28,7 +28,8 @@ def get(resource_id: str, **params: str) -> tuple[int | None, dict | str]:
     url = BASE + resource_id + "?" + urllib.parse.urlencode(query)
     start = time.monotonic()
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=60) as resp:  # noqa: S310 (fixed https host)
+        req = urllib.request.Request(url, headers=HEADERS)  # noqa: S310 (fixed https host)
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
             body = json.load(resp)
             print(f"  HTTP {resp.status} in {time.monotonic() - start:.1f}s")
             return resp.status, body

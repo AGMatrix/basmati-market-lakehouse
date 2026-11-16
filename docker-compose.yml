@@ -1,0 +1,137 @@
+# Local lakehouse stack: `make up` (or `docker compose up -d --build`).
+#
+#   postgres            Airflow metadata DB (internal only, no host port)
+#   minio               S3-compatible object store, built from source (docker/minio)
+#   minio-init          one-shot: creates the lake bucket, then exits
+#   airflow-init        one-shot: migrates the Airflow DB, then exits
+#   airflow-apiserver   UI + REST API + task execution API   -> http://localhost:8080
+#   airflow-scheduler   schedules and runs tasks (LocalExecutor); Spark runs in here
+#   airflow-dag-processor  parses DAG files (a separate process in Airflow 3)
+#
+# Secrets come from .env by interpolation. Each service only gets the variables it needs
+# (no env_file), so e.g. ANTHROPIC_API_KEY never reaches a container.
+
+name: basmati
+
+x-minio-image: &minio-image
+  build: ./docker/minio
+  image: basmati/minio:RELEASE.2025-10-15T17-29-55Z
+
+x-airflow-common: &airflow-common
+  build: ./docker/airflow
+  image: basmati/airflow:3.3.2
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Airflow 3: tasks talk to the API server, and every component must share one JWT secret.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    # Local only: every user is admin, no login page. Never do this on a shared host.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    PYTHONPATH: /opt/project/src
+    # Pipeline settings
+    DATA_GOV_IN_API_KEY: ${DATA_GOV_IN_API_KEY:-}
+    AGMARKNET_CURRENT_RESOURCE_ID: ${AGMARKNET_CURRENT_RESOURCE_ID:-}
+    AGMARKNET_HISTORY_RESOURCE_ID: ${AGMARKNET_HISTORY_RESOURCE_ID:-}
+    AGMARKNET_MAX_RPS: ${AGMARKNET_MAX_RPS:-1}
+    # The SSH tunnel listens on the Mac's 127.0.0.1:1080; containers reach the Mac as
+    # host.docker.internal. Set only when .env sets a proxy (empty when running from India).
+    AGMARKNET_PROXY: ${AGMARKNET_PROXY:+socks5h://host.docker.internal:1080}
+    S3_ENDPOINT: http://minio:9000
+    S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+    S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+    LAKE_BUCKET: ${LAKE_BUCKET:-lake}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/project/src:ro
+    - ./spark_jobs:/opt/project/spark_jobs:ro
+    - ./logs:/opt/airflow/logs
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  postgres:
+    image: postgres:17.12-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow   # not exposed outside the compose network
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    <<: *minio-image
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # web console
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  minio-init:
+    <<: *minio-image
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      LAKE_BUCKET: ${LAKE_BUCKET:-lake}
+    entrypoint: ["/bin/sh", "-c"]
+    # $$ = a literal $ for the container shell (compose would otherwise interpolate it).
+    command:
+      - mc alias set lake http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        && mc mb --ignore-existing "lake/$$LAKE_BUCKET"
+    restart: "no"
+
+  airflow-init:
+    <<: *airflow-common
+    command: ["db", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: ["api-server"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/api/v2/version"]
+      interval: 10s
+      retries: 10
+      start_period: 30s
+    depends_on: &airflow-deps
+      airflow-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ["scheduler"]
+    depends_on: *airflow-deps
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: ["dag-processor"]
+    depends_on: *airflow-deps
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  minio-data:

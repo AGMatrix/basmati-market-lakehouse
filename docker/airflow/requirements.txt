@@ -1,0 +1,5 @@
+# Extra packages for the Airflow image. Exact pins; keep in step with pyproject.toml.
+# boto3 and requests are NOT listed: the base image already ships them (Amazon provider)
+# with versions Airflow is tested against.
+pyspark==4.1.4      # 4.1.x because Iceberg 1.12.0 publishes Spark runtimes for 4.0/4.1 only
+pysocks==1.7.1      # SOCKS support for requests (AGMARKNET_PROXY through the Mumbai tunnel)
