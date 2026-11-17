@@ -66,13 +66,18 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
   - *Plain Parquet:* no atomicity or MERGE, so idempotency becomes my own delete-then-write logic.
 - **Tradeoff:** more moving parts (a catalog, metadata files, compaction). If Spark 4 plus the Iceberg runtime versions don't line up, I fall back to Parquet and document it.
 
-## 8. Iceberg catalog: REST catalog backed by Postgres *(to confirm)*
+## 8. Iceberg catalog: REST catalog backed by Postgres
 - **Why:** both Spark and DuckDB can attach to a REST catalog, so DuckDB reads the *catalog's* current snapshot rather than a hard-coded metadata file path. It reuses the Postgres container that Airflow already needs.
 - **Rejected:**
   - *JDBC/SQL catalog:* Spark supports it, but DuckDB can't attach to it.
   - *Hive Metastore:* heavy and legacy.
   - *Hadoop/file catalog:* not safe for concurrent writers.
   - *Nessie / Polaris:* adds Git-like branching I don't need.
+
+- **Confirmed 2026-11-17:** `apache/iceberg-rest-fixture:1.10.1` (the official Apache image). It only bundles the SQLite driver and starts with `java -jar`, so `docker/iceberg-rest/Dockerfile` adds the Postgres JDBC driver (checksum-verified) and launches the same main class with an explicit classpath. Table pointers live in a separate `iceberg` database on the stack's Postgres; data and metadata files live in MinIO.
+  - **Rejected:** Lakekeeper (production-grade, but needs a bootstrap call, a warehouse-creation call and credential-vending config against MinIO: too many moving parts for a local project); Iceberg JDBC catalog straight from Spark (DuckDB cannot read a JDBC catalog, so dbt would need the latest metadata path by hand).
+  - **Tradeoff:** the image is labelled a "fixture" (meant for tests). It has no auth. Acceptable on localhost; in production I'd use Polaris, Lakekeeper, Glue or Unity.
+- **Spark reads the raw zone through S3A.** Instead of the ~550 MB AWS SDK bundle that `hadoop-aws` normally pulls in, the image adds only `s3-transfer-manager` and `apache-client` at the same SDK version (2.54.17) that `iceberg-aws-bundle` already contains, so Iceberg and S3A share one SDK.
 
 ## 9. Partitioning: by day of `arrival_date`; sort by commodity within the partition
 - **Why:** the main access pattern and the late-data unit are both "a date", so a revision rewrites exactly one partition. Sorting by commodity gives good min/max pruning for basmati queries.

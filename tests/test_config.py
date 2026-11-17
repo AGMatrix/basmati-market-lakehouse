@@ -36,3 +36,11 @@ def test_repr_hides_secrets():
     assert "secret-key" not in text
     assert "s3-secret" not in text
     assert "current-id" in text
+
+
+def test_lake_only_jobs_do_not_need_api_key():
+    env = {k: v for k, v in BASE.items() if not k.startswith(("DATA_GOV", "AGMARKNET"))}
+    s = Settings.from_env(env, require_api=False)
+    assert s.data_gov_in_api_key == ""
+    with pytest.raises(ConfigError, match="DATA_GOV_IN_API_KEY"):
+        Settings.from_env(env)

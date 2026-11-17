@@ -3,6 +3,7 @@
 #   postgres            Airflow metadata DB (internal only, no host port)
 #   minio               S3-compatible object store, built from source (docker/minio)
 #   minio-init          one-shot: creates the lake bucket, then exits
+#   iceberg-rest        Iceberg REST catalog (table pointers in Postgres, data in MinIO)
 #   airflow-init        one-shot: migrates the Airflow DB, then exits
 #   airflow-apiserver   UI + REST API + task execution API   -> http://localhost:8080
 #   airflow-scheduler   schedules and runs tasks (LocalExecutor); Spark runs in here
@@ -44,6 +45,7 @@ x-airflow-common: &airflow-common
     S3_ACCESS_KEY: ${MINIO_ROOT_USER}
     S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     LAKE_BUCKET: ${LAKE_BUCKET:-lake}
+    ICEBERG_REST_URI: http://iceberg-rest:8181
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/project/src:ro
@@ -61,6 +63,7 @@ services:
       POSTGRES_DB: airflow
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init-iceberg.sql:/docker-entrypoint-initdb.d/init-iceberg.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 5s
@@ -95,6 +98,34 @@ services:
         && mc mb --ignore-existing "lake/$$LAKE_BUCKET"
     restart: "no"
 
+  iceberg-rest:
+    build: ./docker/iceberg-rest
+    image: basmati/iceberg-rest:1.10.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # CATALOG_* env vars become catalog properties (CATALOG_S3_ENDPOINT -> s3.endpoint).
+      CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
+      CATALOG_JDBC_USER: airflow
+      CATALOG_JDBC_PASSWORD: airflow
+      CATALOG_WAREHOUSE: s3://${LAKE_BUCKET:-lake}/warehouse
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: us-east-1
+    ports:
+      - "127.0.0.1:8181:8181"   # so DuckDB/dbt on the Mac can read the catalog
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8181/v1/config"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
   airflow-init:
     <<: *airflow-common
     # Migrate, then create the pool that keeps data.gov.in to one caller at a time
@@ -124,6 +155,8 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
+      iceberg-rest:
+        condition: service_healthy
     restart: unless-stopped
 
   airflow-scheduler:

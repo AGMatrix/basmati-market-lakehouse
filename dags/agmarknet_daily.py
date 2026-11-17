@@ -37,12 +37,10 @@ from basmati.assets import RAW_AGMARKNET
 def agmarknet_daily():
     @task(outlets=[RAW_AGMARKNET], pool="agmarknet_api")
     def ingest(params, dag_run, logical_date, outlet_events) -> dict:
-        import boto3
-
         from basmati.config import Settings
         from basmati.ingest.agmarknet import AgmarknetClient, Resource
         from basmati.ingest.pipeline import ingest_day, lookback_days
-        from basmati.ingest.raw_store import RawStore
+        from basmati.ingest.raw_store import RawStore, s3_client
 
         s = Settings.from_env()
         day = date.fromisoformat(params["day"]) if params["day"] else logical_date.date()
@@ -52,13 +50,7 @@ def agmarknet_daily():
         client = AgmarknetClient(
             s.data_gov_in_api_key, max_rps=s.agmarknet_max_rps, proxy=s.agmarknet_proxy
         )
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=s.s3_endpoint,
-            aws_access_key_id=s.s3_access_key,
-            aws_secret_access_key=s.s3_secret_key,
-        )
-        store = RawStore(s3, s.lake_bucket)
+        store = RawStore(s3_client(s), s.lake_bucket)
         history = Resource.history(s.agmarknet_history_resource_id)
         current = Resource.current(s.agmarknet_current_resource_id)
 
