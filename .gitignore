@@ -16,3 +16,4 @@ gx/
 reports/
 dbt/.user.yml
 review/variety_suggestions.csv
+dbt/fixtures/*.duckdb

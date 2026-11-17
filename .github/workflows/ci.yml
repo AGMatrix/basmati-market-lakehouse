@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # PySpark 4.1 needs Java 17 or 21 for the transform unit tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Unit tests (ingestion, Spark transform, config, mapping merge)
+        run: uv run pytest
+
+      - name: dbt build on fixture data (contracts, data tests, unit tests)
+        env:
+          DBT_TARGET: ci
+          DBT_FIXTURE_DB: fixtures/lake_fixture.duckdb
+          MINIO_ROOT_USER: unused
+          MINIO_ROOT_PASSWORD: unused
+        run: |
+          uv run python scripts/make_fixture_db.py
+          cd dbt && uv run dbt build --profiles-dir .
