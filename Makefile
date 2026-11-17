@@ -1,7 +1,7 @@
 # Common tasks. `make help` lists them.
 COMPOSE := docker compose
 
-.PHONY: help setup lint fmt test build up down logs ps run-day backfill rebuild-silver dashboard
+.PHONY: help setup lint fmt test build up down logs ps run-day backfill rebuild-silver rebuild-warehouse map-suggest map-merge dashboard
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -51,6 +51,15 @@ backfill:  ## Backfill a date range, both ends included: make backfill FROM=2015
 
 rebuild-silver:  ## Rebuild silver from every raw partition (after a transform change)
 	$(AIRFLOW) dags trigger silver_daily_price --conf '{"all": true}'
+
+rebuild-warehouse:  ## Re-run dbt + quality gate + publish (e.g. after merging variety mappings)
+	$(AIRFLOW) dags trigger warehouse_build
+
+map-suggest:  ## LLM suggestions for unmapped basmati names -> review/variety_suggestions.csv
+	uv run python scripts/variety_mapping.py suggest
+
+map-merge:  ## Merge rows you approved in review/variety_suggestions.csv into the dbt seed
+	uv run python scripts/variety_mapping.py merge
 
 dashboard:  ## (built in a later step)
 	@echo "'$@' is not implemented yet"; exit 1

@@ -15,3 +15,4 @@ gx/
 .DS_Store
 reports/
 dbt/.user.yml
+review/variety_suggestions.csv
