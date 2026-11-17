@@ -1,0 +1,669 @@
+BASMATI LAKEHOUSE - TROUBLESHOOTING LOG
+=======================================
+
+What this file is
+-----------------
+Every real problem hit while building this project: what failed, WHY it failed, how it
+was fixed, and the reasoning behind the fix. Written for a beginner, so each entry
+explains the concepts involved.
+
+These are good interview stories. Interviewers love "tell me about something that broke
+and how you fixed it". For each one, be ready to explain:
+  1. the symptom (what you saw),
+  2. the root cause (why it really happened, not just the error text),
+  3. the fix, and
+  4. what you would do to stop it happening again.
+
+Format of each entry
+  WHAT FAILED   - the symptom / error message
+  WHY           - the root cause, with background explained
+  FIX           - what was changed
+  REASONING     - why this fix and not another one
+  LESSON        - the general takeaway
+
+Entries are grouped by build step, in the order they happened (Nov 16-17, 2026).
+
+
+=============================================================================
+STEP 1 - PLATFORM (Docker, Airflow, MinIO)
+=============================================================================
+
+#1  Docker was not running
+----------------------------------------------------------------------------
+WHAT FAILED
+  "Cannot connect to the Docker daemon at unix:///Users/.../.colima/default/docker.sock.
+   Is the docker daemon running?"
+
+WHY
+  On a Mac, Docker containers cannot run directly on macOS: they need a Linux kernel.
+  So a small Linux virtual machine (VM) runs in the background and Docker runs inside it.
+  This project uses Colima to manage that VM (Docker Desktop is the other common option).
+  The `docker` command on your Mac is only a client: it sends instructions to the Docker
+  "daemon" (server) inside the VM through a socket file. The VM was stopped (e.g. after a
+  reboot), so there was no daemon to talk to.
+
+FIX
+  colima start
+
+REASONING
+  Nothing was broken; the VM just was not started. Starting it is the whole fix.
+
+LESSON
+  "Cannot connect to the Docker daemon" almost always means the Docker engine/VM is not
+  running, not that your project is broken. Check `colima status` (or Docker Desktop).
+
+
+=============================================================================
+STEP 2 - INGESTION (Airflow DAG pulling data.gov.in)
+=============================================================================
+
+#2  The AWS proxy instance would not start: "InsufficientInstanceCapacity"
+----------------------------------------------------------------------------
+WHAT FAILED
+  aws ec2 start-instances ... -> "InsufficientInstanceCapacity: Insufficient capacity."
+  It kept failing for ~15 minutes of retries.
+
+WHY
+  Background: data.gov.in blocks requests from outside India, so we rent a tiny server
+  (EC2 instance) in AWS's Mumbai region and send API traffic through it (an SSH "SOCKS
+  tunnel").
+  An EC2 instance lives in one "Availability Zone" (AZ), a specific data center. Ours was
+  in ap-south-1c and was type t4g.micro. When you START a stopped instance, AWS must find
+  free hardware of exactly that type in exactly that AZ. That AZ had run out of t4g.micro
+  capacity. This is AWS's problem, not a bug in our code, and it is common for small,
+  popular instance types.
+
+  Two extra problems made it worse:
+  (a) My first retry loop had a bug: `command | tail -1 && break`. In a shell pipeline,
+      the exit status is the status of the LAST command (`tail`), which always succeeds,
+      so the loop "broke" after one attempt. It looked like it retried, but it did not.
+  (b) The obvious fix (switch to a different instance type) needs the permission
+      ec2:ModifyInstanceAttribute, and the `basmati` IAM user did not have it.
+      IAM = AWS's permission system. We deliberately gave this user few permissions
+      ("least privilege"), so this was the safety design working as intended.
+
+FIX
+  With your approval: terminated the stuck instance and created a new one with the
+  project's script, as type t2.micro:
+      INSTANCE_TYPE=t2.micro scripts/aws_india_proxy.sh down
+      INSTANCE_TYPE=t2.micro scripts/aws_india_proxy.sh up
+  AWS placed it in a different zone (ap-south-1b) and it started immediately.
+
+REASONING
+  - A brand-new instance can go to any AZ with capacity; a stopped one is stuck in its AZ.
+  - t2.micro is free on your account's legacy 12-month free tier, while t4g.micro is
+    not. The backfill needs the proxy for many hours, so free mattered.
+  - Deleting was safe: the proxy stores no data, it only forwards traffic.
+  - We did NOT give the IAM user more permissions just to make this easier.
+
+LESSON
+  - Cloud capacity is not infinite; have a fallback (another type or zone).
+  - In shell scripts, never put `| tail` (or any pipe) in front of `&& break` when the
+    exit status matters. Check the command itself.
+  - Disposable, scripted infrastructure ("cattle, not pets") is easy to recreate.
+
+
+#3  The new DAG could not import a shared file: "No module named 'lake_assets'"
+----------------------------------------------------------------------------
+WHAT FAILED
+  ModuleNotFoundError: No module named 'lake_assets'
+  (in dags/agmarknet_daily.py)
+
+WHY
+  I put the Airflow "asset" definitions (the named datasets that link DAGs together) in a
+  separate file in the dags/ folder and imported it. Python only finds modules in folders
+  listed on its search path (sys.path). In this setup the dags/ folder was not on the
+  path when DAG files were parsed, but our package folder src/ was (PYTHONPATH is set to
+  /opt/project/src in docker-compose.yml).
+
+FIX
+  Moved the file into the package: src/basmati/assets.py, imported as
+  `from basmati.assets import RAW_AGMARKNET`.
+
+REASONING
+  Shared code belongs in the installable package, not loose in the DAGs folder. Then the
+  DAGs, the tests and scripts all import it the same way.
+
+LESSON
+  Keep DAG files thin: they define the schedule and tasks and import real logic from a
+  package. That is easier to test and avoids import-path surprises.
+
+
+#4  Manual DAG runs crashed: "missing 1 required positional argument: 'logical_date'"
+----------------------------------------------------------------------------
+WHAT FAILED
+  TypeError: ingest() missing 1 required positional argument: 'logical_date'
+  This only happened when the DAG was triggered by hand, not on its schedule.
+
+WHY
+  In Airflow, a "logical date" is the date a run is about (e.g. the day being ingested).
+  Airflow 3 changed something here: runs triggered manually have NO logical date (it is
+  None), so Airflow did not pass it to the task. My task required it.
+
+FIX
+  Made it optional and fell back to `dag_run.run_after` (the time the run was created),
+  which every run has:
+      when = logical_date or dag_run.run_after
+
+REASONING
+  Scheduled runs and backfill runs still use their logical date (correct for the day they
+  cover); manual runs use "now". The DAG also has a `day` parameter for explicitly choosing
+  a date by hand.
+
+LESSON
+  Major version upgrades (Airflow 2 -> 3) change behaviour. Test every way a pipeline can
+  be started: scheduled, manual, backfill.
+
+
+#5  Unpausing the DAG started a run I did not trigger (surprise, not a failure)
+----------------------------------------------------------------------------
+WHAT HAPPENED
+  Turning the DAG on immediately created a scheduled run that pulled 8 days.
+
+WHY
+  With catchup=False, Airflow skips old missed runs but still creates the MOST RECENT
+  one when a DAG is unpaused. That run ingested the latest day plus the 7-day look-back.
+
+OUTCOME
+  It was useful: it was the first real end-to-end test (124,344 real rows, and Spark ran
+  automatically from the asset event). Documented so it does not surprise you again.
+
+LESSON
+  Know what "catchup" does: catchup=True runs every missed interval since start_date;
+  catchup=False runs only the latest one.
+
+
+#6  The backfill skipped the last day of the range
+----------------------------------------------------------------------------
+WHAT FAILED
+  `make backfill FROM=2015-01-01 TO=2015-01-03` created only 2 runs (Jan 1 and 2).
+
+WHY
+  Our DAG runs at 21:30 UTC each day. The Jan 3 run's time is 2015-01-03 21:30, which
+  is AFTER "2015-01-03" read as midnight (00:00). So Airflow thought it was outside the
+  range. "TO" was effectively exclusive.
+
+FIX
+  The Makefile now passes --to-date "$(TO)T23:59:59", so the whole TO day is included.
+
+LESSON
+  Dates without times usually mean midnight. Be explicit about whether a range end is
+  inclusive, and test the boundary day.
+
+
+#7  The backfill was too slow (~30 seconds per day, ~36 hours total)
+----------------------------------------------------------------------------
+WHAT FAILED
+  Not an error, a performance problem: 40 days took about 20 minutes.
+
+WHY
+  Each day is ~10-21k rows. The API returns rows in "pages". Time per call grew with page
+  size, so the API's limit is throughput (data per second), not per-call overhead:
+      1,000 rows -> 2.7 s   5,000 rows -> 5.2 s   10,000 rows -> 10.8 s
+  On top of that, each Airflow task has startup/scheduling overhead of several seconds.
+  And only one day ran at a time.
+
+FIX
+  1. Page size 5,000 (setting AGMARKNET_PAGE_SIZE): 5x fewer API calls, slightly faster.
+  2. Two days in parallel: Airflow "pool" agmarknet_api raised to 2 slots, and the DAG's
+     max_active_runs raised to 2.
+
+  A mistake along the way: I first raised the concurrency on the wrong backfill (id 1,
+  the small 3-day TEST backfill, instead of id 2, the real one), and the DAG-level limit
+  (max_active_runs=1) also still applied. It stayed at 1 run until I checked the database
+  and fixed both.
+
+REASONING
+  - A "pool" in Airflow is a global limit on how many tasks can use a resource at once.
+    The pool, not the number of runs, is what protects the government API from overload.
+  - 2 concurrent callers roughly halves the time while staying gentle on an API whose
+    rate limits are not documented. Errors like 429 ("too many requests") are retried
+    with backoff anyway.
+
+LESSON
+  Measure before optimising (we measured page sizes first). When a setting "doesn't take
+  effect", look for a second limit at another level (DAG vs backfill vs pool).
+
+
+#8  Three backfill days failed with ConnectionError
+----------------------------------------------------------------------------
+WHAT FAILED
+  2017-08-12, -14, -15 failed after 5 retries of "ConnectionError".
+
+WHY
+  The SSH tunnel to the Mumbai server dropped ("Connection reset by peer"). Long-lived
+  network connections drop now and then (Wi-Fi changes, idle timeouts). During the gap,
+  every API call failed; those days ran out of retries.
+
+FIX
+  - The tunnel runs in a loop that reconnects automatically, so it came back by itself.
+  - Re-ran only the failed days: airflow tasks clear ... --only-failed
+  They succeeded. Because ingestion is idempotent, re-running is always safe.
+
+REASONING
+  "Idempotent" = running the same thing twice gives the same result as running it once.
+  Each day's raw data is written as one file in one operation, so a re-run cleanly
+  replaces it with no duplicates. That is what makes "just re-run it" a safe fix.
+
+LESSON
+  Design for failure: retries with backoff, automatic reconnects, and idempotent writes
+  so failed pieces can simply be re-run.
+
+
+=============================================================================
+STEP 3 - SPARK + ICEBERG
+=============================================================================
+
+#9  The Iceberg catalog container could not connect to Postgres: "No suitable driver"
+----------------------------------------------------------------------------
+WHAT FAILED
+  java.sql.SQLException: No suitable driver found for jdbc:postgresql://postgres:5432/iceberg
+
+WHY
+  Background: an Iceberg "catalog" is a small service that remembers which files make up
+  each table (it stores a pointer to the table's current metadata). We used the official
+  Apache Iceberg REST catalog image and wanted it to store those pointers in our Postgres.
+  Java programs talk to databases through "JDBC drivers" (one jar per database). The image
+  only includes the SQLite driver, not the Postgres one. And it starts with `java -jar`,
+  a mode in which Java IGNORES any extra jars you add to the classpath.
+
+FIX
+  docker/iceberg-rest/Dockerfile: downloads the Postgres JDBC driver (checking its checksum)
+  and starts the same main class with an explicit classpath:
+      java -cp iceberg-rest-adapter.jar:postgresql.jar org.apache.iceberg.rest.RESTCatalogServer
+
+REASONING
+  - Kept the official image (trusted, maintained) and added just one jar.
+  - Considered Lakekeeper (a production-grade catalog), but it needs extra bootstrap
+    steps; too many moving parts for a local project. Recorded in DESIGN_DECISIONS.md #8.
+  - The checksum check means a tampered download fails the build.
+
+LESSON
+  When a prebuilt image is missing one piece, extend it with a small Dockerfile instead of
+  replacing it. `java -jar` ignores -cp; use `java -cp ... MainClass` to add jars.
+
+
+#10  The catalog's health check could not work: /dev/tcp in a dash shell
+----------------------------------------------------------------------------
+WHAT FAILED
+  The health check `exec 3<>/dev/tcp/localhost/8181` would never pass.
+
+WHY
+  /dev/tcp/... is a special feature of the bash shell, not of all shells. Docker's
+  CMD-SHELL runs /bin/sh, which in this image is "dash", a smaller shell without it.
+  I caught this by checking the image before relying on it.
+
+FIX
+  The health check uses curl (which the image has):
+      ["CMD", "curl", "-fs", "http://localhost:8181/v1/config"]
+
+LESSON
+  Check what tools actually exist inside an image (`docker run --rm --entrypoint sh image
+  -c 'which bash curl'`) before writing health checks.
+
+
+#11  Docker builds failed to download anything (DNS failure)
+----------------------------------------------------------------------------
+WHAT FAILED
+  Package downloads in the build failed: "temporary error (try again later)", then
+  "curl: (6) Could not resolve host: repo1.maven.org".
+
+WHY
+  DNS = the system that turns names like repo1.maven.org into IP addresses. The Colima VM
+  could resolve names, but containers inside it could not. This typically happens after
+  the Mac changes networks (e.g. campus Wi-Fi to home): the VM keeps a stale DNS setup
+  for its containers.
+
+FIX
+  colima restart   (refreshes the VM's network config). The stack's containers came back
+  automatically because they are set to "restart: unless-stopped".
+  Also stopped using Alpine's package manager (apk) in build stages and used the
+  curlimages/curl image instead (curl already installed), so builds need one fewer server.
+
+LESSON
+  Test from inside a container, not from your Mac:
+      docker run --rm curlimages/curl:8.11.1 -sI https://repo1.maven.org/maven2/
+  "Works on my Mac but not in the container" is often DNS.
+
+
+#12  Spark could not read from MinIO: missing AWS SDK classes (two rounds)
+----------------------------------------------------------------------------
+WHAT FAILED
+  Round 1: NoClassDefFoundError: software/amazon/awssdk/transfer/s3/model/ObjectTransfer
+  Round 2: NoClassDefFoundError: software/amazon/awssdk/http/apache/ApacheHttpClient
+
+WHY
+  Spark reads files from S3-compatible storage (MinIO) through Hadoop's "S3A" connector
+  (hadoop-aws jar). S3A depends on the AWS Java SDK. The usual recipe adds the whole SDK
+  "bundle", a ~550 MB jar. To avoid that I relied on the AWS SDK already inside Iceberg's
+  iceberg-aws-bundle jar, but that bundle only includes the SDK parts Iceberg needs. S3A
+  also needs two more modules: the "transfer manager" and the "Apache HTTP client".
+  "NoClassDefFoundError" means: code was compiled against a class that is not on the
+  classpath at runtime, i.e. a jar is missing.
+
+FIX
+  Found the exact SDK version inside the Iceberg bundle (2.54.17) and added just those two
+  modules at that same version (283 KB + a small jar, instead of ~550 MB). Checked first
+  that their other dependencies (httpclient, httpcore, commons-codec) already shipped with
+  PySpark, so this was the last missing piece.
+
+REASONING
+  - Same version as the SDK already loaded, so the classes are compatible.
+  - Much smaller image, faster builds.
+  - All jars are downloaded with checksums verified, and pinned to exact versions.
+
+LESSON
+  For Java "class not found" errors: find which jar provides the class, then match its
+  version to what is already on the classpath. Mixing versions of one library causes
+  strange runtime errors.
+
+
+#13  One invalid date crashed the whole Spark job
+----------------------------------------------------------------------------
+WHAT FAILED
+  A unit test with the date "31/02/2023" (Feb 31 does not exist) failed with:
+  DateTimeException: [CANNOT_PARSE_TIMESTAMP] ... Use `try_to_date` to tolerate invalid input
+
+WHY
+  Spark 4 turned on "ANSI mode" by default: bad input raises an error instead of quietly
+  becoming NULL (Spark 3's behaviour). Safer in general, but it means one bad row in
+  millions would fail the whole job.
+
+FIX
+  F.try_to_date(..., "dd/MM/yyyy"): bad dates become NULL, and rows without a valid date
+  are then filtered out (and counted in the run metrics).
+  (Small follow-up error: I first passed the date format as F.lit("...") and got
+  "Column is not iterable"; this function wants a plain string.)
+
+REASONING
+  Source data from 3,000+ markets will contain some garbage. The pipeline should drop and
+  count bad rows, not stop. The test was written exactly to catch this.
+
+LESSON
+  Write tests with ugly inputs (bad dates, blanks, "NA", commas in numbers). Read upgrade
+  notes for default changes like ANSI mode.
+
+
+#14  First draft of the Iceberg write could show readers a half-updated day
+----------------------------------------------------------------------------
+WHAT WAS WRONG (caught in review, before it ran)
+  The first version did DELETE the day's rows, then APPEND the new rows: two separate
+  Iceberg commits. A query running between them would see the day missing.
+  It also read each day's file with a separate Spark job (thousands of jobs for a
+  backfill), and mixing the two API shapes would clash because Spark treats column names
+  case-insensitively ("State" vs "state").
+
+FIX
+  - One atomic operation: df.writeTo(table).overwrite(condition). It deletes the matching
+    days and adds the new rows in ONE commit (snapshot).
+  - Explicit schemas per source shape, and days grouped by source (read from each day's
+    manifest), so Spark reads many days in one job with no schema guessing.
+
+REASONING
+  "Atomic" = all or nothing. Iceberg gives atomic commits, so readers always see either
+  the old version or the new version of a day, never half. That is a key reason to use a
+  table format like Iceberg instead of plain files.
+
+LESSON
+  Think about what a reader sees DURING your write, not just after it.
+
+
+#15  Real data: ~10% of rows were repeated with DIFFERENT prices
+----------------------------------------------------------------------------
+WHAT FAILED
+  8.5% of rows were being dropped by de-duplication; that seemed too many.
+
+WHY
+  Investigation showed these were not junk: about 10% of market x commodity x variety x
+  grade keys are reported more than once on the same day with different prices (e.g.
+  green peas at one market at 2150 AND 2100: probably separate lots or sessions).
+  My first rule "keep the row with the highest modal price" would bias prices UPWARD,
+  which would distort the main analysis.
+  (I had also written in a code comment that the source "occasionally repeats a row"
+  before verifying it; I reworded it rather than state an unverified claim.)
+
+FIX
+  Combine repeats instead of picking one: lowest min price, highest max price, average of
+  the modal prices, plus a new column report_count. Verified afterwards: the sum of
+  report_count equals the raw row count exactly (144,863), so nothing was lost.
+
+  Adding report_count to an existing Iceberg table was a real example of SCHEMA
+  EVOLUTION: ALTER TABLE ... ADD COLUMN changes only metadata, no data files are rewritten.
+
+REASONING
+  The grain (one row per key per day) must hold for the fact table, but the summary must
+  not bias the number the project is about (prices around policy changes).
+
+LESSON
+  When a cleaning step removes a lot of data, stop and look at examples before trusting
+  it. Investigating "why so many?" found a real data property.
+
+
+=============================================================================
+STEP 4/6 - dbt WAREHOUSE AND DATA QUALITY (Great Expectations)
+=============================================================================
+
+#16  Prices below 10 Rs/quintal: different units hiding in the price column
+----------------------------------------------------------------------------
+WHAT FAILED
+  The quality gate's price-range check failed: 76 rows (0.24%) with modal prices like
+  0.01, 1.0, 6.5 Rs per quintal (1 quintal = 100 kg).
+
+WHY
+  Looked at which commodities: Delhi roses at 2.33 (typical 13,250), Tripura fish at 1.0
+  (typical 12,500), potatoes at 0.12. These are priced per bunch, per stem or per kg, but
+  written into a column that is supposed to be "Rs per quintal". The ratios vary (94x to
+  12,500x), and the API gives no unit column, so there is no safe way to convert them.
+
+FIX
+  - Silver keeps them unchanged (the lake stays an honest copy of the source).
+  - dbt staging excludes prices below 10 Rs/quintal (a documented variable,
+    min_plausible_price), so they don't pollute the warehouse.
+  - The quality check uses mostly=0.99: normal levels (~0.1-0.25%) pass, but if the
+    share jumps above 1% the gate fails and someone investigates.
+  None of these rows are rice or basmati.
+
+REASONING
+  Don't invent conversions you can't justify. Separate "keep the raw truth" (silver) from
+  "what is fit for analysis" (warehouse), and alert on change rather than on a known,
+  stable level of noise.
+
+LESSON
+  Quality thresholds should come from measuring real data, not guesses. (Also measured:
+  Sundays have ~45% of a normal day's rows, so a "+/-50% row count" rule would fail every
+  Sunday. The drift bounds are 0.3x-3x for that reason.)
+
+
+#17  min > modal by a fraction of a paisa
+----------------------------------------------------------------------------
+WHAT FAILED
+  A handful of rows broke "min <= modal <= max", e.g. min 2529.332701 vs modal 2529.33.
+
+WHY
+  The source rounds the modal price to 2 decimals but not min/max. A rounding artifact,
+  not a real price error.
+
+FIX
+  The check allows a tolerance of 0.01 (1 paisa).
+
+LESSON
+  Comparing decimal numbers exactly is fragile; use a tolerance that matches the data's
+  precision.
+
+
+#18  The warehouse quality gate crashed: "Catalog 'lake' does not exist"
+----------------------------------------------------------------------------
+WHAT FAILED
+  BinderException: Catalog "lake" does not exist!
+
+WHY
+  dbt's intermediate models are VIEWS (saved queries, not stored tables). They query the
+  Iceberg tables through a catalog that dbt "attaches" under the name `lake` when it
+  connects. My gate opened the DuckDB file directly without attaching it, so the views
+  pointed at something that was not there.
+
+FIX
+  The gate opens the database through the same helper that attaches the Iceberg catalog.
+
+LESSON
+  A view is only as available as the things it depends on. Consumers of views need the
+  same connections the views were built with. (The dashboard only reads mart TABLES,
+  which store their data, so it does not need the catalog.)
+
+
+#19  The quality gate failed 8 times: "/opt/analytics/bin/python: No such file"
+----------------------------------------------------------------------------
+WHAT FAILED
+  8 quality-gate tasks failed in a row, then everything passed again.
+
+WHY
+  Ordering mistake on my side. The DAG code that calls the new analytics environment
+  (/opt/analytics, where dbt and Great Expectations are installed) went live as soon as I
+  saved the file, because the dags/ folder is mounted into the containers. But the
+  Docker image containing /opt/analytics had not been rebuilt yet. For a few minutes the
+  code called a program that did not exist yet.
+
+FIX
+  After the rebuild, re-ran exactly those failed tasks (airflow tasks clear --only-failed).
+
+LESSON
+  Code and the environment it needs must be deployed together (build the image first,
+  then switch the code). In real teams, CI/CD builds and deploys both as one versioned
+  unit for this reason.
+
+
+#20  Obvious false positives in "possible basmati" names
+----------------------------------------------------------------------------
+WHAT FAILED
+  The unmapped-variety list included "Carrot | Pusakesar" and "Onion | Pusa-Red".
+
+WHY
+  The detection rule matched the word "pusa" (as in Pusa Basmati 1121). But "Pusa" is the
+  Indian agricultural research institute's name, used for many crop varieties, not only
+  rice.
+
+FIX
+  Only rice/paddy commodities are checked for basmati variety signals (or the commodity
+  name itself says basmati).
+
+LESSON
+  Keyword rules need context. Look at the matches, not just the count.
+
+
+#21  Generated files committed to git by mistake
+----------------------------------------------------------------------------
+WHAT FAILED
+  dbt/.user.yml (dbt's anonymous install ID) was committed, and the gx/ folder (generated
+  by Great Expectations on each run) showed up as untracked.
+
+FIX
+  Removed from git tracking (git rm --cached) and added both to .gitignore.
+
+LESSON
+  Run `git status` before every commit and check for generated/local files.
+
+
+=============================================================================
+STEP 7 - DASHBOARD
+=============================================================================
+
+#22  The dashboard crashed on the date slider: KeyError <class 'pandas.Timestamp'>
+----------------------------------------------------------------------------
+WHY
+  Streamlit's slider accepts Python date/datetime objects, but DuckDB -> pandas returned
+  pandas Timestamp objects, which the slider does not recognise.
+
+FIX
+  Convert to plain dates for the slider (.date()), and compare using pd.Timestamp.
+  Also replaced a deprecated argument (use_container_width -> width="stretch").
+
+LESSON
+  Libraries pass data between each other in their own types; convert at the boundary.
+  The app was smoke-tested with Streamlit's AppTest to catch crashes like this.
+
+
+=============================================================================
+WEATHER (Open-Meteo)
+=============================================================================
+
+#23  The weather DAG "ran" but nothing happened
+----------------------------------------------------------------------------
+WHY
+  I triggered the DAG seconds after creating the file, before Airflow had parsed and
+  registered it. The trigger command failed and my script did not notice.
+
+FIX
+  Wait until the DAG appears in `airflow dags list`, then trigger.
+
+LESSON
+  New DAG files take a little time to be picked up. Check the trigger's output.
+
+
+#24  Weather API: "429 Too Many Requests"
+----------------------------------------------------------------------------
+WHY
+  Open-Meteo's free tier limits usage per minute/hour/day, and a request is "weighted" by
+  how much data it asks for. Each district asked for 11 years of daily data in one
+  request, so each counted as many calls, and 40 districts in a row exceeded the limit.
+
+FIX
+  - Incremental: each district only fetches dates it does not have yet (plus the last 7
+    days, which the archive fills in late).
+  - Resumable: each district is saved as soon as it is fetched, so a retry continues
+    instead of starting over.
+  - On 429, wait the time the server asks for (the Retry-After header), then retry.
+  - 5 seconds between districts.
+
+LESSON
+  Respect API rate limits: back off, honour Retry-After, and make big loads incremental.
+
+
+#25  Weather task killed while waiting: "403 Invalid auth token"
+----------------------------------------------------------------------------
+WHAT FAILED
+  The server asked to wait 992 seconds (the hourly quota was used up). The task slept,
+  and then Airflow rejected it with "Invalid auth token".
+
+WHY
+  In Airflow 3, a running task talks to the Airflow API server using a short-lived
+  security token. Sleeping ~15 minutes inside the task let that token expire. Also,
+  sleeping that long inside a task is bad practice: it occupies a worker slot doing
+  nothing.
+
+FIX
+  If the API asks for a wait longer than 2 minutes, the task stops cleanly (progress is
+  already saved) and reports which districts were deferred. The DAG now runs every 3
+  hours, so the first full load finishes over a few runs. After that, each run only
+  refreshes the last week, which is tiny.
+
+REASONING
+  Let the scheduler handle waiting (it is built for it) instead of a sleeping task.
+  This only works because the load is incremental and resumable (entry #24).
+
+LESSON
+  Long waits belong to the scheduler, not inside a task. Short retries in the task, long
+  waits as "try again on the next run".
+
+
+=============================================================================
+STILL OPEN (not fixed yet)
+=============================================================================
+
+#26  Export data source not available
+----------------------------------------------------------------------------
+  The APEDA monthly export page found during Step 0 now returns HTTP 404 (page not
+  found), as does the TradeStat URL. The exports table (fct_monthly_exports) is not built,
+  and the dashboard says so. Next step: find the current URL manually in a browser.
+
+
+=============================================================================
+SMALL ONES (my own scripting slips, fixed in seconds)
+=============================================================================
+  - zsh does not split a variable like X="docker compose exec ..." into words, so "$X"
+    ran as one long command name -> "command not found". Used a shell function instead.
+  - DuckDB SQL: "rows" and "days" are reserved words and can't be used as bare column
+    aliases; renamed them (n_rows, n_days).
+  - A scripted find-and-replace in docker-compose.yml matched a second, unintended place
+    ("  airflow-init:" also appears inside depends_on) and duplicated a block; caught by
+    `docker compose config`, then fixed. Lesson: validate config after scripted edits.
+  - Ruff (the linter) flagged long lines and an unused loop variable; fixed as reported.
