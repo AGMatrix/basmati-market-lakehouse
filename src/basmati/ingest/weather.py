@@ -4,8 +4,8 @@
   raw/weather/_districts.json. The point is the geocoder's match for the district name
   (usually the district headquarters town), not a true district centroid.
 - History comes from the archive API (ERA5-based reanalysis, a few days behind real time),
-  one call per district for the whole range, written as one object per district
-  (raw/weather/district=<slug>/daily.json.gz), replaced on every run: idempotent.
+  incremental per district (missing dates + a 7-day refresh), one object per district
+  (raw/weather/district=<slug>/daily.json.gz), rewritten whole on each change: idempotent.
 
 Open-Meteo is free for non-commercial use, needs no key, and is not geo-blocked.
 """
@@ -19,7 +19,7 @@ import re
 import time
 import unicodedata
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import requests
 
@@ -29,6 +29,8 @@ GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 DAILY_VARS = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 PREFIX = "raw/weather"
+REFRESH_DAYS = 7  # the archive fills recent days in late, so re-pull the last week
+MAX_ATTEMPTS = 6
 USER_AGENT = "basmati-lakehouse/0.1"
 
 
@@ -76,19 +78,33 @@ def geocode(session: requests.Session, state: str, district: str) -> District:
     return District(state, district)
 
 
-def fetch_daily(session: requests.Session, d: District, start: date, end: date) -> list[dict]:
-    r = session.get(
-        ARCHIVE_URL,
-        params={
-            "latitude": d.latitude,
-            "longitude": d.longitude,
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-            "daily": ",".join(DAILY_VARS),
-            "timezone": "Asia/Kolkata",
-        },
-        timeout=120,
-    )
+def fetch_daily(
+    session: requests.Session,
+    d: District,
+    start: date,
+    end: date,
+    sleep=time.sleep,
+) -> list[dict]:
+    """One archive call; on 429 waits (Retry-After, else exponential) and retries.
+
+    Open-Meteo's free tier weights a call by its date range and variables, so a multi-year
+    history counts as many calls: 429s are expected on a first load and are not an error.
+    """
+    params = {
+        "latitude": d.latitude,
+        "longitude": d.longitude,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "daily": ",".join(DAILY_VARS),
+        "timezone": "Asia/Kolkata",
+    }
+    for attempt in range(MAX_ATTEMPTS):
+        r = session.get(ARCHIVE_URL, params=params, timeout=120)
+        if r.status_code != 429:
+            break
+        wait = float(r.headers.get("Retry-After") or 60 * 2**attempt)
+        log.warning("open-meteo 429 for %s, waiting %.0fs", d.slug, wait)
+        sleep(min(wait, 900))
     r.raise_for_status()
     daily = r.json()["daily"]
     return [
@@ -122,6 +138,15 @@ class WeatherStore:
             Body=json.dumps(rows, indent=1).encode(),
         )
 
+    def read_district(self, d: District) -> list[dict]:
+        try:
+            body = self._s3.get_object(
+                Bucket=self._bucket, Key=f"{PREFIX}/district={d.slug}/daily.json.gz"
+            )
+        except self._s3.exceptions.NoSuchKey:
+            return []
+        return json.loads(gzip.decompress(body["Body"].read()))["daily"]
+
     def write_district(self, d: District, rows: list[dict]) -> None:
         payload = {"district": asdict(d), "daily": rows}
         self._s3.put_object(
@@ -132,7 +157,7 @@ class WeatherStore:
 
 
 def ingest(
-    s3, bucket: str, wanted: list[tuple[str, str]], start: date, end: date, pause: float = 0.5
+    s3, bucket: str, wanted: list[tuple[str, str]], start: date, end: date, pause: float = 5.0
 ) -> dict:
     """Geocode new districts, then refresh every resolved one. Returns run metrics."""
     session = requests.Session()
@@ -147,13 +172,22 @@ def ingest(
     store.save_districts(districts)
 
     resolved = [d for d in districts.values() if d.status == "resolved"]
-    rows = 0
+    rows = calls = 0
     for d in resolved:
-        daily = fetch_daily(session, d, start, end)
-        store.write_district(d, daily)
-        rows += len(daily)
-        time.sleep(pause)
+        # Incremental + resumable: fetch only what is missing (plus a refresh window) and
+        # save each district as soon as it is done, so a retried run continues, not restarts.
+        have = {r["date"]: r for r in store.read_district(d)}
+        last = max(have) if have else None
+        since = start if last is None else date.fromisoformat(last) - timedelta(REFRESH_DAYS)
+        since = max(since, start)
+        if since <= end:
+            for r in fetch_daily(session, d, since, end):
+                have[r["date"]] = r
+            calls += 1
+            store.write_district(d, [have[k] for k in sorted(have)])
+            time.sleep(pause)
+        rows += len(have)
     unresolved = [f"{d.state} / {d.district}" for d in districts.values() if d.status != "resolved"]
     if unresolved:
         log.warning("not geocoded (no match in the state): %s", unresolved)
-    return {"districts": len(resolved), "rows": rows, "unresolved": unresolved}
+    return {"districts": len(resolved), "rows": rows, "api_calls": calls, "unresolved": unresolved}

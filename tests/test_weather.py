@@ -4,8 +4,10 @@ from basmati.ingest.weather import District, _candidates, fetch_daily, geocode, 
 
 
 class Resp:
-    def __init__(self, body):
+    def __init__(self, body, status=200, headers=None):
         self.body = body
+        self.status_code = status
+        self.headers = headers or {}
 
     def raise_for_status(self):
         pass
@@ -21,7 +23,8 @@ class Session:
 
     def get(self, url, params, timeout):
         self.params.append(params)
-        return Resp(self.bodies.pop(0))
+        b = self.bodies.pop(0)
+        return b if isinstance(b, Resp) else Resp(b)
 
 
 def test_candidates_try_bracketed_alternative():
@@ -59,3 +62,13 @@ def test_fetch_daily_flattens_arrays():
                        "resolved"), date(2024, 9, 13), date(2024, 9, 14))  # fmt: skip
     assert rows[1] == {"date": "2024-09-14", "precipitation_mm": 12.5,
                        "temperature_max_c": 31.0, "temperature_min_c": 24.2}  # fmt: skip
+
+
+def test_fetch_daily_waits_and_retries_on_429():
+    ok = {"daily": {"time": ["2024-09-13"], "precipitation_sum": [1.0],
+                    "temperature_2m_max": [30.0], "temperature_2m_min": [20.0]}}  # fmt: skip
+    slept = []
+    s = Session([Resp({}, 429, {"Retry-After": "7"}), Resp({}, 429), ok])
+    d = District("Haryana", "Karnal", 29.7, 77.0, "Karnal", "resolved")
+    rows = fetch_daily(s, d, date(2024, 9, 13), date(2024, 9, 13), sleep=slept.append)
+    assert len(rows) == 1 and slept == [7.0, 120.0]
