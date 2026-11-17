@@ -1,7 +1,7 @@
 """Open-Meteo weather for the top basmati districts -> silver.weather_daily (Iceberg).
 
-Daily at 02:00 UTC. Reloads each district's history from 2015 in one call (the archive
-API lags real time by a few days, so recent days fill in on later runs).
+Every 3 hours. Incremental per district; when the free quota is spent the run saves
+what it has and stops, and the next run continues (see basmati.ingest.weather).
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from basmati.assets import SILVER_WEATHER
 
 
 @dag(
-    schedule="0 2 * * *",
+    # Every 3 hours: the first 11-year load spans several Open-Meteo hourly quotas and
+    # resumes each run; once complete, each run only refreshes the last week (cheap).
+    schedule="0 */3 * * *",
     start_date=datetime(2026, 11, 1),
     catchup=False,
     max_active_runs=1,

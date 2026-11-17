@@ -31,6 +31,16 @@ DAILY_VARS = ["precipitation_sum", "temperature_2m_max", "temperature_2m_min"]
 PREFIX = "raw/weather"
 REFRESH_DAYS = 7  # the archive fills recent days in late, so re-pull the last week
 MAX_ATTEMPTS = 6
+# Longer waits mean the hourly/daily quota is spent. Sleeping that long inside an Airflow
+# task is wrong (it holds a worker, and Airflow 3's task token expires), so stop instead
+# and let the next scheduled run continue from what is already saved.
+MAX_WAIT_SECONDS = 120
+
+
+class QuotaExhausted(RuntimeError):
+    """Open-Meteo asked us to wait longer than MAX_WAIT_SECONDS."""
+
+
 USER_AGENT = "basmati-lakehouse/0.1"
 
 
@@ -102,9 +112,11 @@ def fetch_daily(
         r = session.get(ARCHIVE_URL, params=params, timeout=120)
         if r.status_code != 429:
             break
-        wait = float(r.headers.get("Retry-After") or 60 * 2**attempt)
+        wait = float(r.headers.get("Retry-After") or 30 * 2**attempt)
+        if wait > MAX_WAIT_SECONDS:
+            raise QuotaExhausted(f"Retry-After {wait:.0f}s")
         log.warning("open-meteo 429 for %s, waiting %.0fs", d.slug, wait)
-        sleep(min(wait, 900))
+        sleep(wait)
     r.raise_for_status()
     daily = r.json()["daily"]
     return [
@@ -173,6 +185,7 @@ def ingest(
 
     resolved = [d for d in districts.values() if d.status == "resolved"]
     rows = calls = 0
+    deferred: list[str] = []
     for d in resolved:
         # Incremental + resumable: fetch only what is missing (plus a refresh window) and
         # save each district as soon as it is done, so a retried run continues, not restarts.
@@ -181,7 +194,15 @@ def ingest(
         since = start if last is None else date.fromisoformat(last) - timedelta(REFRESH_DAYS)
         since = max(since, start)
         if since <= end:
-            for r in fetch_daily(session, d, since, end):
+            try:
+                fetched = fetch_daily(session, d, since, end)
+            except QuotaExhausted as e:
+                deferred = [x.slug for x in resolved[resolved.index(d) :]]
+                log.warning(
+                    "quota spent (%s); %d districts deferred to the next run", e, len(deferred)
+                )
+                break
+            for r in fetched:
                 have[r["date"]] = r
             calls += 1
             store.write_district(d, [have[k] for k in sorted(have)])
@@ -190,4 +211,10 @@ def ingest(
     unresolved = [f"{d.state} / {d.district}" for d in districts.values() if d.status != "resolved"]
     if unresolved:
         log.warning("not geocoded (no match in the state): %s", unresolved)
-    return {"districts": len(resolved), "rows": rows, "api_calls": calls, "unresolved": unresolved}
+    return {
+        "districts": len(resolved),
+        "rows": rows,
+        "api_calls": calls,
+        "deferred": deferred,  # continue on the next run (quota spent)
+        "unresolved": unresolved,
+    }

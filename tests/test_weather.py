@@ -1,6 +1,15 @@
 from datetime import date
 
-from basmati.ingest.weather import District, _candidates, fetch_daily, geocode, slugify
+import pytest
+
+from basmati.ingest.weather import (
+    District,
+    QuotaExhausted,
+    _candidates,
+    fetch_daily,
+    geocode,
+    slugify,
+)
 
 
 class Resp:
@@ -71,4 +80,11 @@ def test_fetch_daily_waits_and_retries_on_429():
     s = Session([Resp({}, 429, {"Retry-After": "7"}), Resp({}, 429), ok])
     d = District("Haryana", "Karnal", 29.7, 77.0, "Karnal", "resolved")
     rows = fetch_daily(s, d, date(2024, 9, 13), date(2024, 9, 13), sleep=slept.append)
-    assert len(rows) == 1 and slept == [7.0, 120.0]
+    assert len(rows) == 1 and slept == [7.0, 60.0]
+
+
+def test_long_retry_after_stops_instead_of_sleeping():
+    s = Session([Resp({}, 429, {"Retry-After": "992"})])
+    d = District("Haryana", "Karnal", 29.7, 77.0, "Karnal", "resolved")
+    with pytest.raises(QuotaExhausted):
+        fetch_daily(s, d, date(2015, 1, 1), date(2026, 11, 1), sleep=lambda _: None)
