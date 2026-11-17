@@ -61,5 +61,5 @@ map-suggest:  ## LLM suggestions for unmapped basmati names -> review/variety_su
 map-merge:  ## Merge rows you approved in review/variety_suggestions.csv into the dbt seed
 	uv run python scripts/variety_mapping.py merge
 
-dashboard:  ## (built in a later step)
-	@echo "'$@' is not implemented yet"; exit 1
+dashboard:  ## Open the Streamlit dashboard (reads the published serving copy)
+	uv run streamlit run dashboard/app.py
