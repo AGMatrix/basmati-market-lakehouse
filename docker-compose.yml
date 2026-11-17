@@ -97,7 +97,13 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    command: ["db", "migrate"]
+    # Migrate, then create the pool that keeps data.gov.in to one caller at a time
+    # (the client's rate limit is per process; the pool makes it global).
+    command:
+      - bash
+      - -c
+      - airflow db migrate
+        && airflow pools set agmarknet_api 1 "data.gov.in - one caller at a time"
     depends_on:
       postgres:
         condition: service_healthy

@@ -39,7 +39,7 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
   - **Tradeoff:** an archived project gets no security fixes. Acceptable for a localhost-only dev store (ports bound to 127.0.0.1). The pipeline only uses the S3 API, so swapping to RustFS/Garage or real S3 is a config change.
 
 ## 5. Raw zone: immutable source JSON under `raw/agmarknet/dt=YYYY-MM-DD/`, overwritten per day
-- **Why:** the raw response is the audit trail and makes replay possible. If a transform bug is found, I re-run Spark without re-calling a rate-limited, geo-blocked API. Writing the whole `dt=` partition (write to a temporary prefix, then swap) makes a re-run idempotent: same day in, same files out, no duplicates.
+- **Why:** the raw response is the audit trail and makes replay possible. If a transform bug is found, I re-run Spark without re-calling a rate-limited, geo-blocked API. Each day is one gzipped JSON object written with a single PUT, which S3/MinIO apply atomically, so a re-run replaces the day completely: same day in, same object out, no duplicates and no half-written partition. A `_manifest.json` (row count, content hash, source resource, API calls) is written last and acts as the commit marker. No temp-prefix-and-swap is needed because there is only one data object per day (~13k rows, well under 10 MB).
 - **Rejected:**
   - *Write straight into tables:* no replay, and source quirks get lost.
   - *Append-only raw with dedup later:* storage grows without limit, and dedup logic moves downstream.
