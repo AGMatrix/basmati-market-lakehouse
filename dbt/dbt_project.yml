@@ -1,0 +1,41 @@
+name: basmati
+version: "1.0.0"
+config-version: 2
+profile: basmati
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Rs/quintal; lower values are a unit mix-up in the source (see stg_agmarknet__daily_price)
+  min_plausible_price: 10
+  # Policy windows (days before/after each MEP change) used by mart_basmati_price_vs_policy
+  policy_windows: [30, 60, 90]
+  date_spine_start: "2015-01-01"
+  date_spine_end: "2027-12-31"
+
+models:
+  basmati:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+      +contract:
+        enforced: true
+
+seeds:
+  basmati:
+    +schema: seeds
+
+snapshots:
+  basmati:
+    +target_schema: snapshots

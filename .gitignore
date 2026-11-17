@@ -13,3 +13,4 @@ dbt/logs/
 *.duckdb.wal
 gx/uncommitted/
 .DS_Store
+reports/

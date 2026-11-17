@@ -47,11 +47,23 @@ x-airflow-common: &airflow-common
     S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     LAKE_BUCKET: ${LAKE_BUCKET:-lake}
     ICEBERG_REST_URI: http://iceberg-rest:8181
+    # dbt / DuckDB / GX (analytics venv) inside containers
+    PROJECT_ROOT: /opt/project
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    DUCKDB_PATH: /opt/project/data/warehouse.duckdb
+    DUCKDB_S3_ENDPOINT: minio:9000
+    DUCKDB_ICEBERG_ENDPOINT: http://iceberg-rest:8181
+    DBT_PROFILES_DIR: /opt/project/dbt
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/project/src:ro
     - ./spark_jobs:/opt/project/spark_jobs:ro
     - ./logs:/opt/airflow/logs
+    - ./dbt:/opt/project/dbt
+    - ./data:/opt/project/data
+    - ./reports:/opt/project/reports
+    - ./gx:/opt/project/gx
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
@@ -135,7 +147,7 @@ services:
       - bash
       - -c
       - airflow db migrate
-        && airflow pools set agmarknet_api 1 "data.gov.in - one caller at a time"
+        && airflow pools set agmarknet_api 2 "data.gov.in - at most 2 concurrent callers"
     depends_on:
       postgres:
         condition: service_healthy

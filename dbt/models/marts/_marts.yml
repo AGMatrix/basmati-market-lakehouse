@@ -1,0 +1,114 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: Calendar 2015-2027 with the kharif marketing year (Oct-Sep).
+    columns:
+      - {name: date_day, data_type: date, data_tests: [unique, not_null]}
+      - {name: year, data_type: integer}
+      - {name: quarter, data_type: integer}
+      - {name: month, data_type: integer}
+      - {name: month_name, data_type: varchar}
+      - {name: month_start, data_type: date}
+      - {name: iso_day_of_week, data_type: integer}
+      - {name: is_weekend, data_type: boolean}
+      - {name: kharif_marketing_year, data_type: integer}
+
+  - name: dim_commodity
+    columns:
+      - {name: commodity_id, data_type: varchar, data_tests: [unique, not_null]}
+      - {name: commodity, data_type: varchar, data_tests: [not_null]}
+      - {name: commodity_code, data_type: varchar}
+      - {name: is_basmati_commodity, data_type: boolean}
+      - {name: is_rice_or_paddy, data_type: boolean}
+
+  - name: dim_market
+    description: SCD Type 2 market dimension (one row per market version).
+    columns:
+      - {name: market_version_id, data_type: varchar, data_tests: [unique, not_null]}
+      - {name: market_id, data_type: varchar, data_tests: [not_null]}
+      - {name: state, data_type: varchar}
+      - {name: market, data_type: varchar}
+      - {name: district, data_type: varchar}
+      - {name: version_number, data_type: integer}
+      - {name: valid_from, data_type: date}
+      - {name: valid_to, data_type: date}
+      - {name: is_current, data_type: boolean}
+      - {name: first_seen, data_type: date}
+      - {name: last_seen, data_type: date}
+
+  - name: dim_variety
+    description: Reviewed basmati variety mapping (from the seed).
+    columns:
+      - {name: variety_id, data_type: varchar, data_tests: [unique, not_null]}
+      - {name: commodity, data_type: varchar}
+      - {name: raw_variety, data_type: varchar}
+      - {name: is_basmati, data_type: boolean}
+      - {name: variety_group, data_type: varchar}
+      - {name: form, data_type: varchar}
+      - {name: processing, data_type: varchar}
+      - {name: mapped_by, data_type: varchar}
+      - {name: reviewed_on, data_type: date}
+
+  - name: dim_policy_event
+    columns:
+      - {name: event_id, data_type: varchar, data_tests: [unique, not_null]}
+      - {name: event_date, data_type: date, data_tests: [not_null]}
+      - {name: event_type, data_type: varchar}
+      - {name: mep_usd_per_tonne_before, data_type: double}
+      - {name: mep_usd_per_tonne_after, data_type: double}
+      - {name: days_since_previous_event, data_type: integer}
+      - {name: source_url, data_type: varchar}
+      - {name: source_type, data_type: varchar}
+      - {name: verification_status, data_type: varchar}
+
+  - name: fct_daily_price
+    description: Daily prices; grain = arrival date x market x commodity x raw variety x grade.
+    columns:
+      - {name: arrival_date, data_type: date, data_tests: [not_null]}
+      - name: market_version_id
+        data_type: varchar
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_market'), field: market_version_id}
+      - name: market_id
+        data_type: varchar
+        data_tests: [not_null]
+      - name: commodity_id
+        data_type: varchar
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_commodity'), field: commodity_id}
+      - name: variety_id
+        data_type: varchar
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_variety'), field: variety_id}
+      - {name: raw_variety, data_type: varchar}
+      - {name: grade, data_type: varchar}
+      - {name: min_price, data_type: double}
+      - {name: max_price, data_type: double}
+      - {name: modal_price, data_type: double, data_tests: [not_null]}
+      - {name: report_count, data_type: integer}
+
+  - name: mart_basmati_price_vs_policy
+    description: >
+      Average basmati modal price (Rs/quintal) in the 30/60/90 days before vs. after each
+      MEP change, by variety group and state ('All India' = all states together).
+    columns:
+      - {name: event_id, data_type: varchar, data_tests: [not_null]}
+      - {name: event_date, data_type: date}
+      - {name: window_days, data_type: integer}
+      - {name: variety_group, data_type: varchar}
+      - {name: state, data_type: varchar}
+      - {name: avg_modal_before, data_type: double}
+      - {name: avg_modal_after, data_type: double}
+      - {name: pct_change, data_type: double}
+      - {name: n_market_days_before, data_type: bigint}
+      - {name: n_market_days_after, data_type: bigint}
+      - {name: n_markets, data_type: bigint}
+    data_tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [event_id, window_days, variety_group, state]

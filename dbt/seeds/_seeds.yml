@@ -1,0 +1,76 @@
+version: 2
+
+seeds:
+  - name: policy_events
+    description: >
+      Basmati Minimum Export Price (MEP) changes, one row per event, with the source used to
+      verify each date. See docs/STEP0_SOURCES.md section 4.
+    config:
+      column_types:
+        event_id: varchar
+        event_date: date
+        event_type: varchar
+        mep_usd_per_tonne_before: double
+        mep_usd_per_tonne_after: double
+        source_url: varchar
+        source_type: varchar
+        verification_status: varchar
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: event_date
+        data_tests: [unique, not_null]
+      - name: event_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [introduce, cut, raise, remove]
+      - name: verification_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [verified, official_doc_pending]
+
+  - name: basmati_variety_map
+    description: >
+      Human-approved mapping of raw Agmarknet (commodity, variety) names to a clean basmati
+      variety group. Rows are added only through scripts/variety_mapping.py after review:
+      the LLM suggests, a person approves or edits, nothing is merged automatically.
+    config:
+      column_types:
+        commodity: varchar
+        raw_variety: varchar
+        is_basmati: boolean
+        variety_group: varchar
+        form: varchar
+        processing: varchar
+        mapped_by: varchar
+        reviewed_on: date
+    columns:
+      - name: raw_variety
+        data_tests: [not_null]
+      - name: variety_group
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["1121", "1509", "1718", "1401", "1847", "1885", "1886", "1692",
+                         "Traditional", "Other Basmati", "Not Basmati"]
+      - name: form
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [paddy, rice]
+      - name: processing
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [raw, steam, sella, not_applicable, unknown]
+      - name: mapped_by
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [llm_accepted, llm_edited, manual]
+    data_tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [commodity, raw_variety]

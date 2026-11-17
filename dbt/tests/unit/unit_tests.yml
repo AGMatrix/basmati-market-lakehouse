@@ -1,0 +1,59 @@
+unit_tests:
+  - name: variety_mapping_keeps_only_reviewed_basmati
+    description: >
+      Rows join to the reviewed map on (commodity, raw variety). Mapped-as-basmati rows get
+      the clean labels; rows mapped as not basmati and unmapped rows are excluded.
+    model: int_basmati_prices
+    given:
+      - input: ref('stg_agmarknet__daily_price')
+        rows:
+          - {arrival_date: 2024-09-10, state: Haryana, market: Karnal, commodity: "Paddy(Basmati)", raw_variety: "1121", modal_price: 4500}
+          - {arrival_date: 2024-09-10, state: Haryana, market: Karnal, commodity: "Paddy(Common)", raw_variety: "1121", modal_price: 4400}
+          - {arrival_date: 2024-09-10, state: Punjab, market: Amritsar, commodity: "Paddy(Common)", raw_variety: "Sarvati", modal_price: 2400}
+          - {arrival_date: 2024-09-10, state: Punjab, market: Amritsar, commodity: Rice, raw_variety: "Basumathi", modal_price: 9200}
+      - input: ref('stg_basmati_variety_map')
+        rows:
+          - {commodity: "Paddy(Basmati)", raw_variety: "1121", is_basmati: true, variety_group: "1121", form: paddy, processing: not_applicable, variety_id: a}
+          - {commodity: "Paddy(Common)", raw_variety: "1121", is_basmati: true, variety_group: "1121", form: paddy, processing: not_applicable, variety_id: b}
+          - {commodity: "Paddy(Common)", raw_variety: "Sarvati", is_basmati: false, variety_group: "Not Basmati", form: paddy, processing: not_applicable, variety_id: c}
+    expect:
+      rows:
+        - {commodity: "Paddy(Basmati)", raw_variety: "1121", variety_group: "1121", form: paddy, modal_price: 4500}
+        - {commodity: "Paddy(Common)", raw_variety: "1121", variety_group: "1121", form: paddy, modal_price: 4400}
+
+  - name: policy_windows_exclude_event_day
+    description: 30-day windows end the day before and start the day after the event.
+    model: int_policy_windows
+    overrides:
+      vars: {policy_windows: [30]}
+    given:
+      - input: ref('stg_policy_events')
+        rows:
+          - {event_id: mep_2024_09_removed, event_date: 2024-09-13, event_type: remove}
+    expect:
+      rows:
+        - {event_id: mep_2024_09_removed, window_days: 30, side: before, window_start: 2024-08-14, window_end: 2024-09-12}
+        - {event_id: mep_2024_09_removed, window_days: 30, side: after, window_start: 2024-09-14, window_end: 2024-10-13}
+
+  - name: price_vs_policy_averages_each_side
+    description: >
+      Before/after averages use only prices inside each window; the event-day price and
+      prices outside the window are ignored; pct_change is relative to the before average.
+    model: mart_basmati_price_vs_policy
+    given:
+      - input: ref('int_policy_windows')
+        rows:
+          - {event_id: e1, event_date: 2024-09-13, window_days: 2, side: before, window_start: 2024-09-11, window_end: 2024-09-12}
+          - {event_id: e1, event_date: 2024-09-13, window_days: 2, side: after, window_start: 2024-09-14, window_end: 2024-09-15}
+      - input: ref('int_basmati_prices')
+        rows:
+          - {arrival_date: 2024-09-10, state: Haryana, market_id: m1, variety_group: "1509", modal_price: 1000}
+          - {arrival_date: 2024-09-11, state: Haryana, market_id: m1, variety_group: "1509", modal_price: 3000}
+          - {arrival_date: 2024-09-12, state: Haryana, market_id: m2, variety_group: "1509", modal_price: 3200}
+          - {arrival_date: 2024-09-13, state: Haryana, market_id: m1, variety_group: "1509", modal_price: 9999}
+          - {arrival_date: 2024-09-14, state: Haryana, market_id: m1, variety_group: "1509", modal_price: 3300}
+          - {arrival_date: 2024-09-15, state: Haryana, market_id: m2, variety_group: "1509", modal_price: 3520}
+    expect:
+      rows:
+        - {event_id: e1, window_days: 2, variety_group: "1509", state: Haryana, avg_modal_before: 3100, avg_modal_after: 3410, pct_change: 10.0, n_market_days_before: 2, n_market_days_after: 2, n_markets: 2}
+        - {event_id: e1, window_days: 2, variety_group: "1509", state: All India, avg_modal_before: 3100, avg_modal_after: 3410, pct_change: 10.0, n_market_days_before: 2, n_market_days_after: 2, n_markets: 2}

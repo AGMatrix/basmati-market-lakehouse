@@ -47,7 +47,7 @@ backfill:  ## Backfill a date range, both ends included: make backfill FROM=2015
 	@test -n "$(FROM)" -a -n "$(TO)" || { echo "usage: make backfill FROM=YYYY-MM-DD TO=YYYY-MM-DD"; exit 1; }
 	$(AIRFLOW) dags unpause silver_daily_price >/dev/null
 	$(AIRFLOW) backfill create --dag-id agmarknet_daily --from-date $(FROM) --to-date $(TO)T23:59:59 \
-		--max-active-runs 1 --reprocess-behavior failed
+		--max-active-runs 2 --reprocess-behavior failed
 
 rebuild-silver:  ## Rebuild silver from every raw partition (after a transform change)
 	$(AIRFLOW) dags trigger silver_daily_price --conf '{"all": true}'

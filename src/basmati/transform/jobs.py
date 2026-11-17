@@ -53,4 +53,5 @@ def run_silver(days: list[date]) -> dict:
         "dropped_rows": raw_rows - rows,  # invalid keys + duplicate keys
         "missing_raw": missing,
         "seconds": round(time.monotonic() - start, 1),
+        "built_days": [d.isoformat() for d in sorted(target_days)],
     }

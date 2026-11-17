@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: stg_agmarknet__daily_price
+    description: Silver prices with surrogate keys; rows without a modal price removed.
+    columns:
+      - name: arrival_date
+        data_tests: [not_null]
+      - name: market_id
+        data_tests: [not_null]
+      - name: modal_price
+        data_tests: [not_null]
+      - name: price_unit
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Rs/quintal]
+      - name: source_resource
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [history, current]
+    data_tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [arrival_date, state, district, market, commodity, raw_variety, grade]
+  - name: stg_policy_events
+  - name: stg_basmati_variety_map

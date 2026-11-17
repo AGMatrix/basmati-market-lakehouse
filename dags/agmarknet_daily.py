@@ -74,7 +74,10 @@ def agmarknet_daily():
             "api_calls": client.calls,
         }
         # The asset event carries which partitions to (re)process downstream.
-        outlet_events[RAW_AGMARKNET].extra = {"changed_dates": changed}
+        outlet_events[RAW_AGMARKNET].extra = {
+            "changed_dates": changed,
+            "run_type": str(dag_run.run_type),  # downstream checks freshness only for daily runs
+        }
         return summary
 
     ingest()

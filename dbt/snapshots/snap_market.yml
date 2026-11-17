@@ -1,0 +1,13 @@
+snapshots:
+  - name: snap_market
+    relation: ref('int_market_attributes')
+    description: >
+      SCD Type 2 history of market attributes. Agmarknet has no market code, so a market is
+      identified by (state, market name); a change of district (e.g. a new district carved
+      out) closes the old version and opens a new one. History is recorded from the first
+      snapshot run onward; it is observed, not reconstructed.
+    config:
+      unique_key: market_id
+      strategy: check
+      check_cols: [district]
+      hard_deletes: ignore

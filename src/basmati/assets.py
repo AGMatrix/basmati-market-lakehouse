@@ -12,3 +12,4 @@ _BUCKET = os.environ.get("LAKE_BUCKET", "lake")
 
 RAW_AGMARKNET = Asset(name="raw_agmarknet", uri=f"s3://{_BUCKET}/raw/agmarknet/")
 SILVER_PRICES = Asset(name="silver_daily_price", uri=f"s3://{_BUCKET}/warehouse/silver/daily_price")
+WAREHOUSE = Asset(name="warehouse_serving", uri="file:///opt/project/data/warehouse_serving.duckdb")

@@ -59,3 +59,15 @@ RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" -r /tmp/requ
 COPY --from=jars --chown=airflow:root /tmp/jars/ /tmp/jars/
 RUN cp /tmp/jars/*.jar "$(python -c 'import pyspark, os; print(os.path.dirname(pyspark.__file__))')/jars/" \
  && rm -rf /tmp/jars
+
+# --- Analytics venv: dbt + DuckDB + GX Core, isolated from Airflow's own dependencies
+# (dbt and Airflow pin conflicting libraries). Exact versions exported from uv.lock.
+# Tasks call it as a subprocess: /opt/analytics/bin/dbt, /opt/analytics/bin/python.
+USER root
+RUN python -m venv /opt/analytics && chown -R airflow:root /opt/analytics
+USER airflow
+COPY analytics-requirements.txt /tmp/analytics-requirements.txt
+RUN /opt/analytics/bin/pip install --no-cache-dir -r /tmp/analytics-requirements.txt \
+ # Pre-install DuckDB extensions so tasks never download them at run time
+ && /opt/analytics/bin/python -c "import duckdb; duckdb.sql('INSTALL iceberg; INSTALL httpfs')"
+

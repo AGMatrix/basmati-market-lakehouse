@@ -27,8 +27,8 @@ from basmati.assets import RAW_AGMARKNET, SILVER_PRICES
     tags=["transform", "spark", "iceberg"],
 )
 def silver_daily_price():
-    @task(outlets=[SILVER_PRICES])
-    def build(params, triggering_asset_events, outlet_events) -> dict:
+    @task
+    def build(params, triggering_asset_events) -> dict:
         from basmati.transform.jobs import all_ingested_days, run_silver
 
         if params["all"]:
@@ -43,19 +43,36 @@ def silver_daily_price():
                     for d in (event.extra or {}).get("changed_dates", [])
                 }
             )
+        # Freshness only makes sense for the daily schedule, not for a backfill of 2015.
+        daily = any(
+            (e.extra or {}).get("run_type") in ("scheduled", "DagRunType.SCHEDULED")
+            for e in triggering_asset_events[RAW_AGMARKNET]
+        )
         if not days:
             print("No changed raw partitions; nothing to do.")
-            return {"days": 0}
+            return {"days": 0, "built_days": [], "daily": daily}
         print(f"Building {len(days)} day(s): {days[0]} .. {days[-1]}")
         metrics = run_silver(days)
-        print(metrics)
-        outlet_events[SILVER_PRICES].extra = {
-            "first_day": metrics.get("first_day"),
-            "last_day": metrics.get("last_day"),
-        }
-        return metrics
+        print({k: v for k, v in metrics.items() if k != "built_days"})
+        return {**metrics, "daily": daily}
 
-    build()
+    @task(outlets=[SILVER_PRICES])
+    def quality_gate(metrics: dict, outlet_events) -> None:
+        """GX checks on the rebuilt days; failing here stops dbt from running."""
+        from airflow.sdk.exceptions import AirflowSkipException
+
+        from basmati.orchestration import run_analytics
+
+        days = metrics.get("built_days") or []
+        if not days:
+            raise AirflowSkipException("nothing was built")
+        args = ["python", "-m", "basmati.quality.checks", "lake", "--days", ",".join(days)]
+        if metrics.get("daily"):
+            args.append("--freshness")
+        run_analytics(args)
+        outlet_events[SILVER_PRICES].extra = {"first_day": days[0], "last_day": days[-1]}
+
+    quality_gate(build())
 
 
 silver_daily_price()

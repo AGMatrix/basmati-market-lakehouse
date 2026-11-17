@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: silver
+    description: Iceberg tables written by Spark (spark_jobs / basmati.transform.silver).
+    database: lake
+    schema: silver
+    tables:
+      - name: daily_price
+        description: One row per arrival date x market x commodity x variety x grade.
+        loaded_at_field: ingested_at
+        config:
+          freshness:
+            warn_after: {count: 2, period: day}
+            error_after: {count: 4, period: day}
