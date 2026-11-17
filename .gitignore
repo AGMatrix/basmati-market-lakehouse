@@ -11,6 +11,7 @@ dbt/dbt_packages/
 dbt/logs/
 *.duckdb
 *.duckdb.wal
-gx/uncommitted/
+gx/
 .DS_Store
 reports/
+dbt/.user.yml
