@@ -38,9 +38,11 @@ def test_current_shape_matches_history_shape(spark):
 
 
 def test_names_are_cleaned_and_states_canonicalised(spark):
-    df = silver(spark, [hist(State=" ORISSA ", District="cuttack  city", Market="  CUTTACK")])
+    df = silver(
+        spark, [hist(State=" ORISSA ", District="cuttack  city", Market="NEW MKT , Cuttack")]
+    )
     r = df.collect()[0]
-    assert (r.state, r.district, r.market) == ("Odisha", "Cuttack City", "Cuttack")
+    assert (r.state, r.district, r.market) == ("Odisha", "Cuttack City", "New Mkt, Cuttack")
 
 
 def test_bad_prices_become_null(spark):
@@ -54,10 +56,16 @@ def test_rows_without_keys_or_date_are_dropped(spark):
     assert df.count() == 1
 
 
-def test_duplicate_keys_keep_highest_modal_deterministically(spark):
-    rows = [hist(Modal_Price="3600"), hist(Modal_Price="3700"), hist(Modal_Price="3650")]
-    df = silver(spark, rows)
-    assert [r.modal_price for r in df.collect()] == [3700.0]
+def test_repeat_reports_are_combined_not_picked(spark):
+    rows = [
+        hist(Min_Price="3500", Max_Price="3800", Modal_Price="3600"),
+        hist(Min_Price="3400", Max_Price="3900", Modal_Price="3700"),
+        hist(Market="Kaithal"),
+    ]
+    out = {r.market: r for r in silver(spark, rows).collect()}
+    k = out["Karnal"]
+    assert (k.min_price, k.max_price, k.modal_price, k.report_count) == (3400, 3900, 3650, 2)
+    assert out["Kaithal"].report_count == 1
 
 
 def test_missing_variety_and_grade_get_defaults(spark):

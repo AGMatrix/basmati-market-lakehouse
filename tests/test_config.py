@@ -44,3 +44,9 @@ def test_lake_only_jobs_do_not_need_api_key():
     assert s.data_gov_in_api_key == ""
     with pytest.raises(ConfigError, match="DATA_GOV_IN_API_KEY"):
         Settings.from_env(env)
+
+
+@pytest.mark.parametrize("bad", ["x", "0", "20000"])
+def test_invalid_page_size(bad):
+    with pytest.raises(ConfigError, match="AGMARKNET_PAGE_SIZE"):
+        Settings.from_env({**BASE, "AGMARKNET_PAGE_SIZE": bad})

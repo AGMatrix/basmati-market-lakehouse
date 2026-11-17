@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from pyspark.sql import Column, DataFrame, SparkSession, Window
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructField, StructType
 
@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     modal_price    DOUBLE  COMMENT 'Most frequent traded price, Rs per quintal',
     price_unit     STRING,
     source         STRING  COMMENT 'current | history (data.gov.in resource)',
-    ingested_at    TIMESTAMP COMMENT 'When this partition was last rewritten'
+    ingested_at    TIMESTAMP COMMENT 'When this partition was last rewritten',
+    report_count   INT     COMMENT 'Source rows combined into this row (same key, same day)'
 )
 USING iceberg
 PARTITIONED BY (days(arrival_date))
@@ -62,8 +63,8 @@ TBLPROPERTIES (
 
 
 def clean_text(c: Column) -> Column:
-    """Trim, collapse inner whitespace; empty -> null."""
-    t = F.regexp_replace(F.trim(c), r"\s+", " ")
+    """Trim, collapse inner whitespace, no space before commas; empty -> null."""
+    t = F.regexp_replace(F.regexp_replace(F.trim(c), r"\s+", " "), r" ,", ",")
     return F.when(t == "", None).otherwise(t)
 
 
@@ -104,19 +105,29 @@ def normalise(raw: DataFrame, source: str) -> DataFrame:
     )
 
 
-def deduplicate(df: DataFrame) -> DataFrame:
+SILVER_COLUMNS = [
+    *KEY[:5], "commodity_code", *KEY[5:], "min_price", "max_price", "modal_price",
+    "price_unit", "source", "ingested_at", "report_count",
+]  # fmt: skip
+
+
+def combine_repeats(df: DataFrame) -> DataFrame:
     """One row per market x commodity x variety x grade x day.
 
-    If the source sends the same key more than once (the run metrics record how often), we
-    keep the row with the highest modal price, ties broken by max/min price, so the choice
-    is deterministic across re-runs.
+    About 10% of keys are reported more than once a day with different prices (measured on
+    Nov 2026 data: e.g. separate lots or sessions at the same mandi). Picking one row would
+    bias the price, so repeats are combined: lowest min, highest max, mean of the modal
+    prices, and `report_count` keeps how many reports went in.
     """
-    w = Window.partitionBy(*KEY).orderBy(
-        F.col("modal_price").desc_nulls_last(),
-        F.col("max_price").desc_nulls_last(),
-        F.col("min_price").desc_nulls_last(),
+    return df.groupBy(*KEY).agg(
+        F.min("min_price").alias("min_price"),
+        F.max("max_price").alias("max_price"),
+        F.round(F.avg("modal_price"), 2).alias("modal_price"),
+        F.max("commodity_code").alias("commodity_code"),
+        F.first("price_unit").alias("price_unit"),
+        F.first("source").alias("source"),
+        F.count(F.lit(1)).cast("int").alias("report_count"),
     )
-    return df.withColumn("_rn", F.row_number().over(w)).filter("_rn = 1").drop("_rn")
 
 
 def build_silver(raw: DataFrame, source: str) -> DataFrame:
@@ -127,7 +138,8 @@ def build_silver(raw: DataFrame, source: str) -> DataFrame:
     )
     # Variety/grade are part of the key; null would make "unknown" rows collapse oddly.
     df = df.fillna({"variety": "Other", "grade": "FAQ", "district": "Unknown"})
-    return deduplicate(df).withColumn("ingested_at", F.current_timestamp())
+    out = combine_repeats(df).withColumn("ingested_at", F.current_timestamp())
+    return out.select(*SILVER_COLUMNS)
 
 
 # Explicit all-string schemas, one per source shape: no schema inference pass over the
@@ -169,8 +181,18 @@ def read_silver(
 
 
 def ensure_table(spark: SparkSession) -> None:
+    """Create the table, or evolve an older one in place (Iceberg schema evolution).
+
+    Adding a column is a metadata-only change in Iceberg: no data files are rewritten, and
+    rows written before the change read the new column as NULL until their day is rebuilt.
+    """
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lake.silver")
     spark.sql(SCHEMA_DDL)
+    if "report_count" not in spark.table(TABLE).columns:
+        spark.sql(
+            f"ALTER TABLE {TABLE} ADD COLUMN report_count INT "
+            "COMMENT 'Source rows combined into this row (same key, same day)'"
+        )
 
 
 def write_days(silver: DataFrame, days: list[date]) -> int:

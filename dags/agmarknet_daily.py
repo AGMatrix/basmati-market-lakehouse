@@ -36,19 +36,24 @@ from basmati.assets import RAW_AGMARKNET
 )
 def agmarknet_daily():
     @task(outlets=[RAW_AGMARKNET], pool="agmarknet_api")
-    def ingest(params, dag_run, logical_date, outlet_events) -> dict:
+    def ingest(params, dag_run, outlet_events, logical_date=None) -> dict:
         from basmati.config import Settings
         from basmati.ingest.agmarknet import AgmarknetClient, Resource
         from basmati.ingest.pipeline import ingest_day, lookback_days
         from basmati.ingest.raw_store import RawStore, s3_client
 
         s = Settings.from_env()
-        day = date.fromisoformat(params["day"]) if params["day"] else logical_date.date()
+        # Airflow 3: manual runs have no logical_date; run_after is always set.
+        when = logical_date or dag_run.run_after
+        day = date.fromisoformat(params["day"]) if params["day"] else when.date()
         # Backfill runs cover every day themselves; look-back would re-pull each day 8 times.
         lookback = 0 if dag_run.run_type == "backfill" else params["lookback_days"]
 
         client = AgmarknetClient(
-            s.data_gov_in_api_key, max_rps=s.agmarknet_max_rps, proxy=s.agmarknet_proxy
+            s.data_gov_in_api_key,
+            max_rps=s.agmarknet_max_rps,
+            proxy=s.agmarknet_proxy,
+            page_size=s.agmarknet_page_size,
         )
         store = RawStore(s3_client(s), s.lake_bucket)
         history = Resource.history(s.agmarknet_history_resource_id)

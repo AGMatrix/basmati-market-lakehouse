@@ -38,6 +38,7 @@ x-airflow-common: &airflow-common
     AGMARKNET_CURRENT_RESOURCE_ID: ${AGMARKNET_CURRENT_RESOURCE_ID:-}
     AGMARKNET_HISTORY_RESOURCE_ID: ${AGMARKNET_HISTORY_RESOURCE_ID:-}
     AGMARKNET_MAX_RPS: ${AGMARKNET_MAX_RPS:-1}
+    AGMARKNET_PAGE_SIZE: ${AGMARKNET_PAGE_SIZE:-5000}
     # The SSH tunnel listens on the Mac's 127.0.0.1:1080; containers reach the Mac as
     # host.docker.internal. Set only when .env sets a proxy (empty when running from India).
     AGMARKNET_PROXY: ${AGMARKNET_PROXY:+socks5h://host.docker.internal:1080}

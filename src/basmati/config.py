@@ -33,6 +33,7 @@ class Settings:
     s3_secret_key: str = field(repr=False)
     lake_bucket: str = "lake"
     agmarknet_max_rps: float = 1.0
+    agmarknet_page_size: int = 5000
     agmarknet_proxy: str | None = None
 
     @classmethod
@@ -51,6 +52,12 @@ class Settings:
             raise ConfigError(f"AGMARKNET_MAX_RPS must be a number: {e}") from e
         if max_rps <= 0:
             raise ConfigError("AGMARKNET_MAX_RPS must be > 0")
+        try:
+            page_size = int(env.get("AGMARKNET_PAGE_SIZE") or 5000)
+        except ValueError as e:
+            raise ConfigError(f"AGMARKNET_PAGE_SIZE must be an integer: {e}") from e
+        if not 1 <= page_size <= 10000:
+            raise ConfigError("AGMARKNET_PAGE_SIZE must be between 1 and 10000")
         return cls(
             data_gov_in_api_key=env.get("DATA_GOV_IN_API_KEY", "").strip(),
             agmarknet_current_resource_id=env.get("AGMARKNET_CURRENT_RESOURCE_ID", "").strip(),
@@ -60,5 +67,6 @@ class Settings:
             s3_secret_key=env["S3_SECRET_KEY"].strip(),
             lake_bucket=(env.get("LAKE_BUCKET") or "lake").strip(),
             agmarknet_max_rps=max_rps,
+            agmarknet_page_size=page_size,
             agmarknet_proxy=(env.get("AGMARKNET_PROXY") or "").strip() or None,
         )
