@@ -13,3 +13,12 @@ sources:
           freshness:
             warn_after: {count: 2, period: day}
             error_after: {count: 4, period: day}
+      - name: weather_daily
+        description: >
+          Open-Meteo archive (ERA5 reanalysis) daily weather for the top basmati districts,
+          at the geocoder's point for each district (usually its headquarters town).
+        loaded_at_field: ingested_at
+        config:
+          freshness:
+            warn_after: {count: 3, period: day}
+

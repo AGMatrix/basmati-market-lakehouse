@@ -146,6 +146,8 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
 - **Rejected:** IMD gridded rainfall (more authoritative, but binary grids and heavier processing).
 - **Tradeoff:** reanalysis data at one point per district is an approximation of field conditions.
 
+- **As built (2026-11-17):** the point is Open-Meteo's geocoder match for each district name (usually the district headquarters town), not a computed centroid; names the geocoder cannot match within the state are logged as unresolved, not guessed. Districts are chosen per run: the 40 GI-state districts with the most basmati price rows.
+
 ## 19. DuckDB 1.5.6, not 2.0
 - **Why:** the spec says 1.x, and dbt-duckdb currently pins DuckDB 1.5.x in its extras. The Iceberg and REST-catalog extensions are proven on 1.x. 2.0 is brand-new, so I'd upgrade only after the pipeline works.
 
@@ -153,3 +155,19 @@ Items marked *(to confirm)* are decided in principle and will be confirmed when 
 - **Why:** reproducible builds, and protection against a freshly published malicious or broken release. `uv.lock` pins every Python package; `[tool.uv] exclude-newer` makes the resolver ignore anything published after a fixed date (moved forward deliberately). Docker base images are pinned to exact tags, and the MinIO source to a commit SHA.
 - **Consequence:** Airflow is 3.3.2, not 3.4.0 (released 2026-11-06); bump after 2026-11-20.
 - **Tradeoff:** security fixes arrive up to two weeks late unless I bump on purpose.
+
+## 21. Silver combines repeat reports instead of picking one
+- **Why:** measured on Nov 2026 data, about 10% of market x commodity x variety x grade keys are reported more than once a day with different prices (separate lots or sessions). Keeping the highest modal price biased prices upward. Silver now keeps one row per key with the lowest min, highest max and mean modal, plus `report_count`.
+- **Rejected:** keeping every report (no natural key for the grain, and double-counting in averages); picking the first (non-deterministic order across pages).
+- **Tradeoff:** the mean of modal prices is not a volume-weighted price; Agmarknet's API gives no quantities to weight by.
+
+## 22. Quality thresholds come from the data, not from defaults
+- Measured 2026-11-17: Sundays run at ~0.45x the trailing 7-day row count and Fridays reach ~2x, so drift bounds are 0.3x-3x (a +/-50% rule fails every Sunday). ~0.1-0.25% of rows carry another unit in the Rs/quintal column, so the price-bounds check uses `mostly=0.99`. Min/modal/max checks allow 1 paisa for source-side rounding.
+- **Tradeoff:** looser bounds catch fewer small problems; they are re-tuned once the full backfill shows the 2015-2026 distribution.
+
+## 23. API concurrency: 2 callers
+- **Why:** each day costs ~1.05 s per 1,000 rows plus Airflow task overhead; one caller gave ~30 s/day (~36 h for 2015-2026). Two concurrent callers (Airflow pool `agmarknet_api` = 2) roughly halve that while keeping load on an undocumented-limit government API small; 429s are retried with backoff.
+
+## 24. dbt-core 1.12, not dbt v2
+- dbt now announces v2 as the default for new installations. The spec asks for dbt-core 1.8+, dbt-duckdb supports 1.12, and contracts/unit tests/snapshots are all 1.x features; I'd evaluate v2 after the pipeline is complete.
+

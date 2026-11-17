@@ -22,7 +22,8 @@ from basmati.assets import RAW_AGMARKNET
     schedule=CronTriggerTimetable("30 21 * * *", timezone="UTC"),
     start_date=datetime(2010, 1, 1),  # backfill can reach the history resource's start
     catchup=False,
-    max_active_runs=1,
+    # Two runs at once; the agmarknet_api pool (2 slots) is what limits calls to the API.
+    max_active_runs=2,
     default_args={
         "retries": 2,
         "retry_delay": timedelta(minutes=5),

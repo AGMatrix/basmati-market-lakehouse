@@ -1,4 +1,6 @@
-"""silver -> dbt (DuckDB) -> quality gate -> serving copy. Triggered by the silver asset.
+"""silver -> dbt (DuckDB) -> quality gate -> serving copy.
+
+Triggered when either silver asset updates (prices OR weather: an Airflow 3 asset expression).
 
 Runs only after silver passed its lake quality gate (the asset is emitted by that gate).
 The serving copy that the dashboard reads is replaced only if the warehouse gate passes,
@@ -11,10 +13,15 @@ from pathlib import Path
 
 from airflow.sdk import dag, task
 
-from basmati.assets import SILVER_PRICES, WAREHOUSE
+from basmati.assets import SILVER_PRICES, SILVER_WEATHER, WAREHOUSE
 
 
-@dag(schedule=[SILVER_PRICES], catchup=False, max_active_runs=1, tags=["warehouse", "dbt"])
+@dag(
+    schedule=(SILVER_PRICES | SILVER_WEATHER),
+    catchup=False,
+    max_active_runs=1,
+    tags=["warehouse", "dbt"],
+)
 def warehouse_build():
     @task
     def dbt_build() -> None:

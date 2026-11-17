@@ -44,5 +44,16 @@ if __name__ == "__main__":
         "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Rs/quintal', 'history', now(), 1)",
         ROWS,
     )
+    con.sql(
+        """
+        create table silver.weather_daily as
+        select d::date as weather_date, 'Haryana' as state, 'Karnal' as district,
+               case when day(d) % 3 = 0 then 12.5 else 0.0 end as precipitation_mm,
+               33.0 as temperature_max_c, 24.0 as temperature_min_c,
+               29.69 as latitude, 76.99 as longitude, 'Karnal' as geocoded_place,
+               now() as ingested_at
+        from range(date '2024-08-01', date '2024-10-31', interval 1 day) t(d)
+        """
+    )
     con.close()
     print(f"wrote {OUT} ({len(ROWS)} rows)")

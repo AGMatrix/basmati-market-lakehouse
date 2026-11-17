@@ -112,3 +112,25 @@ models:
       - dbt_utils_free_unique_combination:
           arguments:
             columns: [event_id, window_days, variety_group, state]
+
+  - name: mart_basmati_price_weather
+    description: >
+      Monthly basmati modal price by district and variety group with that month's rainfall
+      and average maximum temperature (Open-Meteo, one point per district). Weather is null
+      where the district has no geocoded point.
+    columns:
+      - {name: month_start, data_type: date, data_tests: [not_null]}
+      - {name: state, data_type: varchar}
+      - {name: district, data_type: varchar}
+      - {name: variety_group, data_type: varchar}
+      - {name: form, data_type: varchar}
+      - {name: avg_modal_price, data_type: double}
+      - {name: n_market_days, data_type: bigint}
+      - {name: precipitation_mm, data_type: double}
+      - {name: avg_temperature_max_c, data_type: double}
+      - {name: n_weather_days, data_type: bigint}
+    data_tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [month_start, state, district, variety_group, form]
+

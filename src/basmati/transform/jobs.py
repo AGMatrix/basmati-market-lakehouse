@@ -55,3 +55,22 @@ def run_silver(days: list[date]) -> dict:
         "seconds": round(time.monotonic() - start, 1),
         "built_days": [d.isoformat() for d in sorted(target_days)],
     }
+
+
+def run_weather(start: date, end: date, top_n: int = 40) -> dict:
+    """Pick basmati districts, refresh their Open-Meteo history, rebuild silver.weather_daily."""
+    from basmati.ingest import weather as ingest_weather
+    from basmati.transform.spark_session import build_spark
+    from basmati.transform.weather import basmati_districts, read_weather, write_weather
+
+    settings = Settings.from_env(require_api=False)
+    spark = build_spark("silver_weather_daily")
+    try:
+        wanted = basmati_districts(spark, top_n)
+        metrics = ingest_weather.ingest(
+            s3_client(settings), settings.lake_bucket, wanted, start, end
+        )
+        metrics["silver_rows"] = write_weather(spark, read_weather(spark, settings.lake_bucket))
+    finally:
+        spark.stop()
+    return metrics
