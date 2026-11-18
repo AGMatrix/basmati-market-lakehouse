@@ -172,10 +172,20 @@ start, end = c4.slider("Weeks", min_value=lo, max_value=hi, value=(lo, hi), form
 
 
 def by_variety(df: pd.DataFrame, col: str = "variety_group") -> pd.DataFrame:
-    """Keep rows of the selected variety (groups outside GROUP_ORDER count as Other Basmati)."""
+    """Keep rows of the selected basmati variety (groups outside GROUP_ORDER count as Other
+    Basmati; non-basmati rows never match a basmati variety)."""
     if variety == "All varieties":
         return df
-    return df[df[col].where(df[col].isin(GROUP_ORDER), "Other Basmati") == variety]
+    folded = df[col].where(df[col].isin(GROUP_ORDER), "Other Basmati")
+    if "is_basmati" in df:
+        folded = folded.where(df["is_basmati"].astype(bool), None)
+    return df[folded == variety]
+
+
+def by_rice_type(df: pd.DataFrame) -> pd.DataFrame:
+    if rice_type == "All rice":
+        return df
+    return df[df["is_basmati"].astype(bool) == (rice_type == "Basmati")]
 
 
 sel = prices[
@@ -292,28 +302,41 @@ else:
     )
 
 # --- 3. where to buy now --------------------------------------------------------------------
-st.subheader("Where to buy now: cheapest recent prices by variety")
+st.subheader("Where to buy rice now: cheapest recent prices by variety")
+rice_type = (
+    st.segmented_control("Rice type", ["All rice", "Basmati", "Non-basmati"], default="All rice")
+    or "All rice"
+)
+# Milled rice only (commodity "Rice"). Basmati rows use the reviewed variety group; other
+# rice uses the variety name as reported (Common, Sona Mansoori, ...).
 recent = query(
-    f"""
+    """
     with last as (select max(arrival_date) as d from marts.fct_daily_price),
-    latest as (  -- each market's most recent report per variety in the last 14 days
-        select v.variety_group, m.state, m.district, m.market, f.grade,
-               f.arrival_date, f.min_price, f.modal_price, f.max_price,
-               row_number() over (partition by v.variety_group, f.market_id
-                                  order by f.arrival_date desc) as rn
+    rice as (
+        select coalesce(case when v.is_basmati then v.variety_group end, f.raw_variety)
+                   as variety_group,
+               coalesce(v.is_basmati, false) as is_basmati, f.market_id,
+               m.state, m.district, m.market, f.grade,
+               f.arrival_date, f.min_price, f.modal_price, f.max_price
         from marts.fct_daily_price f
-        join marts.dim_variety v using (variety_id)
+        join marts.dim_commodity c using (commodity_id)
+        left join marts.dim_variety v using (variety_id)
         join marts.dim_market m using (market_version_id), last
-        where v.is_basmati and v.form = '{form}' and f.arrival_date > last.d - 14
+        where lower(c.commodity) = 'rice' and f.arrival_date > last.d - 14
+    ),
+    latest as (  -- each market's most recent report per variety in the last 14 days
+        select *, row_number() over (partition by variety_group, market_id
+                                     order by arrival_date desc) as rn
+        from rice
     )
-    select * exclude (rn) from latest where rn = 1
-    """  # noqa: S608 (form comes from a fixed two-option control)
+    select * exclude (rn, market_id) from latest where rn = 1
+    """
 )
 if state != "All states":
     recent = recent[recent["state"] == state]
-recent = by_variety(recent)
+recent = by_rice_type(by_variety(recent))
 if recent.empty:
-    st.info("No basmati reports in the last 14 days for this form and state.")
+    st.info("No rice reports in the last 14 days for this selection.")
 else:
     as_of = pd.to_datetime(recent["arrival_date"]).max().date()
     st.caption(
@@ -340,6 +363,7 @@ else:
                          "arrival_date": "reported_on"})
         .reset_index()
     )  # fmt: skip
+    summary = summary.sort_values("markets", ascending=False)
     summary["saving_vs_median_%"] = (
         100 * (summary["median_modal"] - summary["cheapest_modal"]) / summary["median_modal"]
     ).round(1)
@@ -363,22 +387,25 @@ else:
     )  # fmt: skip
 
 # --- 4. mandi prices, portal style ---------------------------------------------------------
-st.subheader("Mandi prices by state")
+st.subheader("Rice prices by mandi")
 reports = query(
     """
     with last as (select max(arrival_date) as d from marts.fct_daily_price)
-    select f.arrival_date, m.state, m.district, m.market, v.commodity, f.raw_variety,
-           v.variety_group, f.grade, f.min_price, f.max_price, f.modal_price
+    select f.arrival_date, m.state, m.district, m.market, c.commodity, f.raw_variety,
+           v.variety_group, coalesce(v.is_basmati, false) as is_basmati, f.grade,
+           f.min_price, f.max_price, f.modal_price
     from marts.fct_daily_price f
-    join marts.dim_variety v using (variety_id)
+    join marts.dim_commodity c using (commodity_id)
+    left join marts.dim_variety v using (variety_id)
     join marts.dim_market m using (market_version_id), last
-    where v.is_basmati and f.arrival_date > last.d - 90
+    where lower(c.commodity) = 'rice' and f.arrival_date > last.d - 90
     """
 )
 reports["arrival_date"] = pd.to_datetime(reports["arrival_date"]).dt.date
 m1, m2, m3 = st.columns([2, 2, 3])
 report_states = sorted(reports["state"].unique())
-default_state = state if state in report_states else "Punjab"
+busiest = reports.groupby("state")["market"].nunique().idxmax() if len(reports) else None
+default_state = state if state in report_states else busiest
 mandi_state = m1.selectbox(
     "State", report_states, key="mandi_state",
     index=report_states.index(default_state) if default_state in report_states else 0,
@@ -390,7 +417,7 @@ as_of = reports["arrival_date"].max()
 rows = in_state[in_state["arrival_date"] > as_of - pd.Timedelta(days=days)]
 if district != "All districts":
     rows = rows[rows["district"] == district]
-rows = by_variety(rows)
+rows = by_rice_type(by_variety(rows))
 # Latest report per mandi x commodity x variety x grade, like the portal's daily listing.
 latest = (
     rows.sort_values("arrival_date")
@@ -399,12 +426,10 @@ latest = (
     .sort_values(["district", "market", "commodity", "raw_variety"])
 )
 if latest.empty:
-    st.info(
-        f"No basmati reports from {mandi_state} in the {days}-day window ending {as_of:%d %b %Y}."
-    )
+    st.info(f"No rice reports from {mandi_state} in the {days}-day window ending {as_of:%d %b %Y}.")
 else:
     st.caption(
-        f"{latest['market'].nunique()} mandis in {mandi_state}: each one's latest basmati report "
+        f"{latest['market'].nunique()} mandis in {mandi_state}: each one's latest rice report "
         f"in the {days} days to {as_of:%d %b %Y} (the newest data loaded). Agmarknet publishes "
         "daily reports, not live quotes; the pipeline adds a new day each evening while it runs. "
         "Prices in Rs per quintal."

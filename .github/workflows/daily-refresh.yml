@@ -1,0 +1,72 @@
+name: daily-refresh
+
+# Keeps the hosted dashboard current without the Mac: fetch the last 7 days from Agmarknet
+# through the Mumbai proxy, run the same silver/dbt/quality code on the lite lake in S3,
+# and publish the dashboard extract only if the warehouse gate passes. See docs/DAILY_REFRESH.md.
+on:
+  schedule:
+    - cron: "30 3 * * *"  # 09:00 IST: the history resource is complete to the previous day
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: Days before yesterday to re-check
+        default: "7"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ap-south-1
+      AWS_ACCESS_KEY_ID: ${{ secrets.PROXY_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.PROXY_AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Start the India proxy
+        env:
+          PROXY_SSH_KEY: ${{ secrets.PROXY_SSH_KEY }}
+        run: scripts/ci_proxy.sh up
+
+      - name: Ingest, transform, test, publish
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+          AGMARKNET_PROXY: socks5h://127.0.0.1:1080
+          LITE_LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
+          DATA_GOV_IN_API_KEY: ${{ secrets.DATA_GOV_IN_API_KEY }}
+          AGMARKNET_HISTORY_RESOURCE_ID: ${{ secrets.AGMARKNET_HISTORY_RESOURCE_ID }}
+          AGMARKNET_CURRENT_RESOURCE_ID: ${{ secrets.AGMARKNET_CURRENT_RESOURCE_ID }}
+          SERVING_S3_BUCKET: ${{ secrets.SERVING_S3_BUCKET }}
+          SERVING_AWS_ACCESS_KEY_ID: ${{ secrets.SERVING_AWS_ACCESS_KEY_ID }}
+          SERVING_AWS_SECRET_ACCESS_KEY: ${{ secrets.SERVING_AWS_SECRET_ACCESS_KEY }}
+          SERVING_AWS_REGION: us-east-1
+          MINIO_ROOT_USER: unused
+          MINIO_ROOT_PASSWORD: unused
+        run: uv run python -m basmati.lite
+
+      - name: Quality report
+        if: always()
+        run: cat reports/quality/warehouse_latest.md 2>/dev/null || true
+
+      - name: Stop the India proxy
+        if: always()
+        run: scripts/ci_proxy.sh down

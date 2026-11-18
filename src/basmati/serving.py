@@ -1,8 +1,8 @@
 """Publish a small serving extract of the warehouse for the hosted dashboard.
 
 The full serving warehouse is ~4.6 GB (55M price rows), but the dashboard reads only
-basmati rows (~0.25%). `export_extract` writes those rows plus the dimensions and the
-policy mart into a few-MB DuckDB file. `upload_extract` puts it in a private S3 bucket,
+basmati and rice rows (~2%). `export_extract` writes those rows plus the dimensions and
+the policy mart into a small DuckDB file. `upload_extract` puts it in a private S3 bucket,
 which the hosted app (Streamlit Community Cloud) reads with a read-only key, so the
 hosted dashboard refreshes after every warehouse build without data going into git.
 
@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_KEY = "serving/basmati_demo.duckdb"
-COPIED_TABLES = ("dim_variety", "dim_policy_event", "mart_basmati_price_vs_policy")
+COPIED_TABLES = ("dim_variety", "dim_commodity", "dim_policy_event", "mart_basmati_price_vs_policy")
 
 
 def export_extract(src: Path, out: Path) -> dict[str, int]:
@@ -28,10 +28,13 @@ def export_extract(src: Path, out: Path) -> dict[str, int]:
     con = duckdb.connect(str(tmp))
     con.execute(f"ATTACH '{src}' AS src (READ_ONLY)")
     con.execute("CREATE SCHEMA marts")
+    # Basmati (paddy and rice, for the policy analysis) plus every rice row (mandi tables).
     con.execute("""
         CREATE TABLE marts.fct_daily_price AS
         SELECT f.* FROM src.marts.fct_daily_price f
-        JOIN src.marts.dim_variety v USING (variety_id) WHERE v.is_basmati
+        LEFT JOIN src.marts.dim_variety v USING (variety_id)
+        JOIN src.marts.dim_commodity c USING (commodity_id)
+        WHERE coalesce(v.is_basmati, false) OR lower(c.commodity) = 'rice'
         ORDER BY f.arrival_date
     """)
     con.execute("""

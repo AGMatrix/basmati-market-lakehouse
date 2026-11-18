@@ -33,6 +33,20 @@ basmati:
             endpoint: "{{ env_var('DUCKDB_ICEBERG_ENDPOINT', 'http://localhost:8181') }}"
             authorization_type: none
 
+    # Daily GitHub Actions refresh (src/basmati/lite.py): the warehouse file persists in S3,
+    # and a DuckDB "lite lake" (rice + basmati rows) is attached as `lake` instead of Iceberg.
+    lite:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '../data/warehouse_lite.duckdb') }}"
+      threads: 2
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '3GB') }}"
+        preserve_insertion_order: false
+      attach:
+        - path: "{{ env_var('LITE_LAKE', '../data/lite_lake.duckdb') }}"
+          alias: lake
+          read_only: true
+
     ci:
       type: duckdb
       path: ":memory:"

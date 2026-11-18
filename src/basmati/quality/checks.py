@@ -52,6 +52,9 @@ def lake_connection(
 ) -> duckdb.DuckDBPyConnection:
     """DuckDB with the Iceberg REST catalog attached as `lake` (same settings as dbt)."""
     con = duckdb.connect(db_path, read_only=read_only)
+    if lite := os.environ.get("LITE_LAKE"):  # daily GitHub job: a DuckDB file stands in
+        con.execute(f"ATTACH IF NOT EXISTS '{lite}' AS lake (READ_ONLY)")
+        return con
     con.sql("INSTALL iceberg; INSTALL httpfs; LOAD iceberg; LOAD httpfs;")
     con.execute(
         "CREATE OR REPLACE SECRET lake_s3 (TYPE s3, KEY_ID ?, SECRET ?, ENDPOINT ?, "

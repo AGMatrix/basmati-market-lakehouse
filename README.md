@@ -74,20 +74,28 @@ make map-merge && make rebuild-warehouse
 make dashboard                    # http://localhost:8501
 ```
 
-### Hosted demo (no Docker needed)
+### Hosted demo (no Docker needed), refreshed daily by GitHub Actions
+
+Every day at 09:00 IST, [`daily-refresh`](.github/workflows/daily-refresh.yml) starts the Mumbai
+proxy, ingests the last 7 days with the same ingest, Spark and dbt code against a small "lite
+lake" in S3 (rice + basmati rows), runs the warehouse quality gate, publishes the dashboard
+extract if it passes, and stops the proxy, all with the Mac off. Details and setup:
+[docs/DAILY_REFRESH.md](docs/DAILY_REFRESH.md).
+
 
 After every warehouse build whose quality gate passes, `publish_hosted` exports a
-basmati-only extract (3.2 MB, 138k rows, 891 markets) and uploads it to a private S3 bucket.
+extract of basmati and all rice (16 MB, 1.1M rows) and uploads it to a private S3 bucket.
 The hosted app reads it with a read-only key, so it refreshes without data going into git
 (setup: [docs/HOSTED_DASHBOARD.md](docs/HOSTED_DASHBOARD.md)). If S3 is not configured or
 unreachable, the app falls back to the snapshot committed in `dashboard/demo/`
 (`make demo-db`). It runs on [Streamlit Community Cloud](https://share.streamlit.io) (deployed at https://basmati-market.streamlit.app):
 **New app → this repo, branch `main`, file `dashboard/app.py`** (it installs
 `dashboard/requirements.txt`, not the full pipeline). The dashboard has four sections: weekly
-prices with MEP markers, before/after each MEP change, **where to buy now** (each market's
+prices with MEP markers, before/after each MEP change, **where to buy rice now** (each market's
 latest report in the last 14 days, cheapest per variety, with prices more than 30% below the
-median flagged for checking rather than picked), and **mandi prices by state** (portal-style:
-pick a state and district to list every mandi's latest report with min / max / modal price).
+median flagged for checking rather than picked), and **rice prices by mandi** (portal-style:
+pick a state and district to list every mandi's latest rice report with min / max / modal price;
+all rice, or basmati / non-basmati).
 A variety filter narrows every section to one variety. Prices are daily
 Agmarknet reports, not live quotes.
 
