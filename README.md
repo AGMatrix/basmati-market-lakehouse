@@ -1,5 +1,7 @@
 # Basmati Market Lakehouse
 
+**Live dashboard: https://basmati-market.streamlit.app** (basmati-only demo snapshot; see *Hosted demo*)
+
 A local, reproducible batch lakehouse for Indian mandi (wholesale market) prices, built to
 answer one question for a rice trading or procurement team: **how did basmati prices move
 around India's Minimum Export Price (MEP) changes in 2023–2024?**
@@ -76,7 +78,7 @@ make dashboard                    # http://localhost:8501
 
 `dashboard/demo/basmati_demo.duckdb` (3.2 MB) is a basmati-only snapshot of the published
 warehouse (138k rows, 891 markets), rebuilt with `make demo-db`. With no local warehouse the
-app falls back to it, so it runs on [Streamlit Community Cloud](https://share.streamlit.io):
+app falls back to it, so it runs on [Streamlit Community Cloud](https://share.streamlit.io) (deployed at https://basmati-market.streamlit.app):
 **New app → this repo, branch `main`, file `dashboard/app.py`** (it installs
 `dashboard/requirements.txt`, not the full pipeline). The dashboard has four sections: weekly
 prices with MEP markers, before/after each MEP change, **where to buy now** (each market's
