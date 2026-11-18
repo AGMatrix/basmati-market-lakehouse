@@ -76,9 +76,12 @@ make dashboard                    # http://localhost:8501
 
 ### Hosted demo (no Docker needed)
 
-`dashboard/demo/basmati_demo.duckdb` (3.2 MB) is a basmati-only snapshot of the published
-warehouse (138k rows, 891 markets), rebuilt with `make demo-db`. With no local warehouse the
-app falls back to it, so it runs on [Streamlit Community Cloud](https://share.streamlit.io) (deployed at https://basmati-market.streamlit.app):
+After every warehouse build whose quality gate passes, `publish_hosted` exports a
+basmati-only extract (3.2 MB, 138k rows, 891 markets) and uploads it to a private S3 bucket.
+The hosted app reads it with a read-only key, so it refreshes without data going into git
+(setup: [docs/HOSTED_DASHBOARD.md](docs/HOSTED_DASHBOARD.md)). If S3 is not configured or
+unreachable, the app falls back to the snapshot committed in `dashboard/demo/`
+(`make demo-db`). It runs on [Streamlit Community Cloud](https://share.streamlit.io) (deployed at https://basmati-market.streamlit.app):
 **New app → this repo, branch `main`, file `dashboard/app.py`** (it installs
 `dashboard/requirements.txt`, not the full pipeline). The dashboard has four sections: weekly
 prices with MEP markers, before/after each MEP change, **where to buy now** (each market's

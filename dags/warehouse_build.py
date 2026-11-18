@@ -4,7 +4,8 @@ Triggered when either silver asset updates (prices OR weather: an Airflow 3 asse
 
 Runs only after silver passed its lake quality gate (the asset is emitted by that gate).
 The serving copy that the dashboard reads is replaced only if the warehouse gate passes,
-so a failed run leaves the dashboard on the last good build.
+so a failed run leaves the dashboard on the last good build. After that, a basmati-only
+extract is uploaded to a private S3 bucket for the hosted dashboard (if configured).
 """
 
 from __future__ import annotations
@@ -43,7 +44,25 @@ def warehouse_build():
 
         return str(publish_serving_copy(Path(os.environ["DUCKDB_PATH"])))
 
-    dbt_build() >> warehouse_gate() >> publish()
+    @task
+    def publish_hosted() -> str:
+        """Upload the basmati extract for the hosted dashboard (skipped if S3 isn't set up)."""
+        import os
+
+        from airflow.sdk.exceptions import AirflowSkipException
+
+        from basmati.orchestration import PROJECT_ROOT, run_analytics
+        from basmati.serving import upload_extract
+
+        if not os.environ.get("SERVING_S3_BUCKET"):
+            raise AirflowSkipException("SERVING_S3_BUCKET not set")
+        data = PROJECT_ROOT / "data"
+        out = data / "basmati_demo.duckdb"
+        run_analytics(["python", "-m", "basmati.serving", "export",
+                       str(data / "warehouse_serving.duckdb"), str(out)])  # fmt: skip
+        return upload_extract(out)
+
+    dbt_build() >> warehouse_gate() >> publish() >> publish_hosted()
 
 
 warehouse_build()

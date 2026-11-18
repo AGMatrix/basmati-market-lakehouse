@@ -8,6 +8,7 @@ DuckDB's single-writer lock and never shows a half-built or failed build.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import altair as alt
@@ -17,10 +18,47 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVING = ROOT / "data" / "warehouse_serving.duckdb"
-# Hosted demo (Streamlit Community Cloud) has no lake: fall back to the small basmati-only
-# snapshot committed in dashboard/demo/ (rebuilt with `make demo-db`).
+# Hosted (Streamlit Community Cloud): no lake, so read the basmati extract that
+# warehouse_build uploads to a private S3 bucket, using a read-only key in st.secrets["s3"].
+# Without secrets, fall back to the snapshot committed in dashboard/demo/ (make demo-db).
 DEMO = ROOT / "dashboard" / "demo" / "basmati_demo.duckdb"
-DB = Path(os.environ.get("SERVING_DB") or (SERVING if SERVING.exists() else DEMO))
+HOSTED = Path(tempfile.gettempdir()) / "basmati_hosted.duckdb"
+
+
+@st.cache_resource(ttl=3600)  # re-download at most hourly; the pipeline updates it daily
+def fetch_hosted() -> Path | None:
+    try:
+        cfg = st.secrets["s3"]
+    except (KeyError, FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        return None
+    import boto3
+
+    s3 = boto3.client(
+        "s3",
+        region_name=cfg.get("region", "us-east-1"),
+        aws_access_key_id=cfg["aws_access_key_id"],
+        aws_secret_access_key=cfg["aws_secret_access_key"],
+    )
+    tmp = HOSTED.with_suffix(".tmp")
+    s3.download_file(cfg["bucket"], cfg.get("key", "serving/basmati_demo.duckdb"), str(tmp))
+    os.replace(tmp, HOSTED)
+    return HOSTED
+
+
+def pick_db() -> Path:
+    if os.environ.get("SERVING_DB"):
+        return Path(os.environ["SERVING_DB"])
+    if SERVING.exists():
+        return SERVING
+    try:
+        return fetch_hosted() or DEMO
+    except Exception as e:  # noqa: BLE001 (any S3 problem: show the committed snapshot)
+        st.warning(f"Could not load the latest data from S3 ({type(e).__name__}); "
+                   "showing the committed snapshot.")  # fmt: skip
+        return DEMO
+
+
+DB = pick_db()
 
 # Reference categorical palette, validated (light + dark) with the dataviz validator.
 # Each variety group owns a fixed slot, so filtering never repaints the remaining series.
@@ -58,14 +96,19 @@ def style(chart: alt.Chart) -> alt.Chart:
     )
 
 
+# Cache keys include the file's modification time, so a newly downloaded extract gets a new
+# connection and fresh query results instead of stale cached ones.
+VERSION = DB.stat().st_mtime if DB.exists() else 0.0
+
+
 @st.cache_resource
-def connect() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(str(DB), read_only=True)
+def connect(db: str, version: float) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(db, read_only=True)
 
 
 @st.cache_data(ttl=300)
-def query(sql: str) -> pd.DataFrame:
-    return connect().sql(sql).df()
+def query(sql: str, db: str = str(DB), version: float = VERSION) -> pd.DataFrame:
+    return connect(db, version).sql(sql).df()
 
 
 if not DB.exists():
@@ -102,11 +145,13 @@ prices["variety_group"] = prices["variety_group"].where(
 
 # --- filters: one row above the charts ------------------------------------------------------
 st.title("Basmati prices vs export policy")
-if DB == DEMO:
+if DB in (DEMO, HOSTED):
     st.info(
-        "Demo snapshot: basmati rows from the full 55M-row warehouse, exported on the date of "
-        "the latest data shown. Source and pipeline: github.com/AGMatrix/basmati-market-lakehouse"
-    )
+        ("Daily extract published by the pipeline after its quality gates pass"
+         if DB == HOSTED else "Committed snapshot")
+        + ": basmati rows from the full 55M-row warehouse. "
+        "Pipeline: github.com/AGMatrix/basmati-market-lakehouse"
+    )  # fmt: skip
 st.caption(
     "Agmarknet daily mandi prices (Rs per quintal), weekly average of market-day modal prices. "
     "Vertical lines mark Minimum Export Price (MEP) changes."
