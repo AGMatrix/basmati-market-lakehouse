@@ -17,19 +17,19 @@ and 8 GB RAM). Nothing is estimated. The SQL to reproduce each analytical number
 | Silver rebuild, 65 days / 1.09M rows | **39.6 s** of Spark work, 66 s for the whole Airflow run | task metrics |
 | Warehouse build on the full history | dbt **112.8 s** (64 nodes), quality gate **16 s**, publish **24 s** | task logs |
 | dbt checks | **64** (42 data tests, 3 unit tests, contracts on 9 mart tables): all pass | `dbt build` |
-| Python unit tests | **39** pass | `make test` |
-| Warehouse fact table | **55,039,691** rows from **8,398** market versions; basmati: **138,044** rows from **891** markets (95% paddy) | `marts.fct_daily_price` |
+| Python unit tests | **48** pass | `make test` |
+| Warehouse fact table | **55,039,691** rows from **8,398** market versions; basmati: **156,186** rows from **904** markets (95% paddy) | `marts.fct_daily_price` |
 
 ## 2. LLM-assisted variety mapping (offline, human-reviewed)
 
 | Metric | Value |
 |---|---|
-| Unmapped (commodity, variety) names found by the warehouse gate | 69 |
-| API calls | 3 batches (25 + 25 + 19 names), `claude-opus-5-5`, structured output |
-| Approved by a person | 69 / 69 |
-| Accepted unchanged | **67 (97.1%)** |
+| Review rounds | 2: 69 names from the first warehouse gate, then 3 more found when the basmati spelling check was widened (troubleshooting #33) |
+| API calls | 4 batches, `claude-opus-5-5`, structured (typed) output |
+| Approved by a person | 72 / 72 |
+| Accepted unchanged | **70 (97.2%)** |
 | Edited by the reviewer | 2: `Paddy(Basmati) \| Hybrid` and `Paddy(Dhan)(Basmati) \| Other`, both changed from basmati to not basmati |
-| Result | 61 names mapped as basmati, 8 as not basmati; warehouse gate went from FAIL (69 unmapped) to PASS |
+| Effect of round 2 | +18,142 basmati reports that a spelling list had missed (`Basumathi`); basmati rows 138,044 → 156,186 |
 
 Source: `review/mapping_log.jsonl`.
 
@@ -101,7 +101,45 @@ from w where p_before is not null and p_after is not null
 order by all;
 ```
 
-## 4. Problems found only at full scale
+## 4. Daily refresh in the cloud (GitHub Actions)
+
+| Metric | Value |
+|---|---|
+| Schedule | every day 09:00 IST, with the Mac off |
+| Run time | 3 min 43 s (first run, 8 days ingested and published); 3 min 33 s (forced rebuild) |
+| What it runs | the same `ingest_day`, Spark `build_silver`, dbt models (64 checks) and warehouse gate as the local pipeline, on a lite lake in S3 |
+| Lite vs full warehouse | identical: 156,186 basmati rows, 977,918 rice rows, 0 differing policy-mart rows |
+| Proxy | the Mumbai instance runs only during the job; SSH is opened for the runner's IP and closed again |
+| Hosted extract | 1.1M rows (basmati + all rice), 16 MB |
+
+## 5. Weekly price forecast
+
+One gradient-boosting model (scikit-learn `HistGradientBoostingRegressor`, quantile loss)
+across **49** rice and basmati series × regions with at least 300 weeks of history and 3+
+reporting mandis a week. It predicts the 1–4 week price change from price history,
+seasonality (week of year, last year's move), mandi activity and the MEP regime. The 80%
+band is conformally calibrated on a held-out year.
+
+Backtest: trained on targets before Jan 2024 (102,455 rows), scored on Jan 2024 – Nov 2026
+(27,030 rows) that the model never saw. Mean absolute % error:
+
+| Horizon | Model | No change | Last year's change |
+|---|---|---|---|
+| 1 week | **4.01%** | 4.12% | 6.15% |
+| 2 weeks | **4.80%** | 5.00% | 7.32% |
+| 3 weeks | **5.43%** | 5.73% | 8.18% |
+| 4 weeks | **5.84%** | 6.20% | 8.55% |
+| All | **5.01%** | 5.25% | 7.54% |
+
+- 80% band coverage on the test period: **79.9%** (before calibration: 75.2%).
+- Honest reading: the model beats "price stays the same" at every horizon, but only by
+  about 5% of the error. Stable series (Rice Fine, Sona Mansoori; 1–2% error) leave little
+  to gain. Volatile ones gain more, e.g. Other Basmati rice 14.7% lower error, before the
+  mandi filter.
+- The biggest improvement would come from data the API lacks: arrival quantities (supply),
+  export volumes, world rice prices and USD/INR.
+
+## 6. Problems found only at full scale
 
 Details in [docs/TROUBLESHOOTING_LOG.txt](docs/TROUBLESHOOTING_LOG.txt):
 
@@ -109,8 +147,10 @@ Details in [docs/TROUBLESHOOTING_LOG.txt](docs/TROUBLESHOOTING_LOG.txt):
 - **#28:** dbt was OOM-killed on 55M rows. Capping DuckDB at 3 GB and materialising staging brought the full build to 113 s.
 - **#29:** a uniqueness test caught duplicate commodity ids (`Kutki`/`kutki`).
 - **#30:** mixed CRLF/LF line endings broke `dbt seed` after the mapping merge.
+- **#33:** a spelling *list* missed 18,142 `Basumathi` reports; a spelling *pattern* found them.
+- **#34:** the Mac's disk filled up; deleted-but-open files (`lsof +L1`) were holding 6.8 GB.
 
 ## Not measured yet
 
-- **End-to-end time of a scheduled daily run:** the Mumbai proxy is stopped, so no scheduled daily ingest has run since the backfill.
+- **Forecast accuracy on live data:** every run's forecasts are logged (`ml.forecast_log`); they can be scored once the predicted weeks have happened.
 - **Exports by destination:** the APEDA/DGCI&S source is not verified (troubleshooting #26).

@@ -60,7 +60,7 @@ Prerequisites: Docker (Docker Desktop or Colima, ~8 GB RAM for the VM), [uv](htt
 cp .env.example .env              # add DATA_GOV_IN_API_KEY, resource ids, AIRFLOW_JWT_SECRET
 make setup                        # local Python env (uv)
 make up                           # Postgres, MinIO, Iceberg REST catalog, Airflow 3
-make test                         # 39 unit tests (ingestion, Spark transform, mapping, weather)
+make test                         # 48 unit tests (ingestion, Spark, mapping, weather, forecast, serving)
 ```
 
 Outside India, start the Mumbai proxy first ([docs/INDIA_PROXY_AWS.md](docs/INDIA_PROXY_AWS.md)) and set `AGMARKNET_PROXY=socks5h://127.0.0.1:1080`.
@@ -176,9 +176,10 @@ FROM lake.silver.daily_price VERSION AS OF <first_snapshot_id>;
 | History | **4,339** days (2015-01-01 → 2026-11-17), **8,325** markets, **421** commodities, **34** states/UTs |
 | Full backfill | **4,330** Airflow runs, **0 failed**, 16 h 45 min wall clock (2 concurrent, via proxy), median 10.1 s per day |
 | Warehouse build on the full history | dbt **113 s** + quality gate 16 s + publish 24 s |
-| Basmati varieties mapped | 69 names; **97.1%** of LLM suggestions accepted unchanged by the reviewer |
+| Basmati varieties mapped | 72 names in 2 review rounds; **97.2%** of LLM suggestions accepted unchanged |
 | Headline | 1121 basmati paddy **+21.0%** (60 days after the Aug 2023 MEP) and **+28.7%** (after the Oct 2023 cut), vs −8.0% and +4.6% in the same weeks of 2022. Not causal: see [RESULTS.md](RESULTS.md) |
-| End-to-end scheduled daily run | not measured yet (proxy stopped after the backfill) |
+| Daily cloud refresh (GitHub Actions) | **3 min 43 s**: ingest 8 days → Spark → dbt (64 checks) → gate → forecast → publish |
+| Price forecast (1–4 weeks, 49 series) | MAPE **5.01%** vs 5.25% no-change, 7.54% seasonal naive; 80% band covers **79.9%** (test: 2024–2026) |
 
 ## Repository layout
 

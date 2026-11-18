@@ -4,16 +4,22 @@ Every number here is measured (see [RESULTS.md](../RESULTS.md)).
 
 ## Two-line description
 
-Basmati Market Lakehouse: a local, $0 batch lakehouse (Airflow 3, Spark 4.1, Apache Iceberg,
-dbt + DuckDB, Great Expectations, Streamlit) that ingests 12 years of Indian mandi prices
-(55M rows) and measures how basmati prices moved around India's 2023–2024 export-price changes.
+Basmati Market Lakehouse: a batch lakehouse (Airflow 3, Spark 4.1, Apache Iceberg, dbt + DuckDB,
+Great Expectations) over 12 years of Indian mandi prices (55M rows), refreshed daily in GitHub
+Actions, with a live Streamlit dashboard and a calibrated weekly price forecast.
+Live: https://basmati-market.streamlit.app · Code: https://github.com/AGMatrix/basmati-market-lakehouse
 
-## Resume bullets
+## Resume bullets (pick 3-4)
 
-- Built an asset-driven lakehouse (Airflow 3, Spark 4.1, Apache Iceberg, MinIO) that backfilled 55.4M mandi price records (4,339 days, 8,325 markets) in 4,330 runs with 0 failures. Daily runs re-pull a 7-day look-back, use content hashes to detect late revisions, and replace only the changed days in one atomic Iceberg commit.
-- Modeled a dbt + DuckDB star schema with contracts, unit tests and an SCD2 market dimension, gated by 64 dbt checks and Great Expectations. Diagnosed full-scale failures (OOM kills, ephemeral-port exhaustion, duplicate keys) to get a 113 s full rebuild. Added LLM-suggested variety mapping with human review (97.1% of suggestions accepted unchanged).
+- Built an asset-driven lakehouse (Airflow 3, Spark 4.1, Apache Iceberg on S3-compatible storage) that backfilled 55.4M agricultural price records (4,339 days, 8,325 markets) in 4,330 runs with 0 failures, using a 7-day look-back, content-hash change detection and atomic per-day Iceberg overwrites.
+- Automated a daily cloud refresh in GitHub Actions (about 4 min, $0 compute) that starts an AWS proxy for a geo-blocked API, re-runs the same Spark, dbt and quality-gate code on an S3 "lite lake", and publishes to a live dashboard only when all 64 dbt checks and the Great Expectations gate pass. Output is verified identical to the full warehouse.
+- Modeled a dbt + DuckDB star schema with enforced contracts, unit tests and an SCD2 market dimension. Diagnosed full-scale failures (out-of-memory kills, ephemeral-port exhaustion, duplicate keys, a full disk) to get a 113 s rebuild of 55M rows.
+- Trained a gradient-boosting price forecaster (scikit-learn, quantile loss) across 49 rice series, retrained daily. On 2024–2026 data it had never seen, it beat a no-change baseline at every 1–4 week horizon (5.01% vs 5.25% MAPE), with a conformally calibrated 80% interval covering 79.9% of outcomes.
+- Designed a human-in-the-loop LLM step (Claude, typed structured output) that maps messy product names. 97.2% of 72 suggestions were accepted unchanged. Replacing a spelling list with a pattern recovered 18,142 records the quality gate had missed.
 
-## Five interview questions
+**Skills line:** Python, SQL, Apache Airflow, Apache Spark, Apache Iceberg, dbt, DuckDB, Great Expectations, scikit-learn, AWS (S3, EC2, IAM), GitHub Actions, Docker, Streamlit
+
+## Interview questions
 
 **1. How do you handle late-arriving or revised data?**
 Each day is stored in raw as one object, together with a manifest that records a content hash
@@ -63,3 +69,19 @@ had labelled a hybrid paddy and an "Other" bucket as basmati.
 causal estimate. India's non-basmati export ban, the overlapping 2023 windows and changes in
 which markets report all confound it. A next step would be a difference-in-differences
 design, using non-basmati paddy as a control.
+
+**6. Tell me about your forecasting model. Is it any good?**
+It predicts each rice series' price 1–4 weeks ahead as a % change, so series at 2,500 and
+7,000 Rs/quintal share one model. Features are price history, last year's move for the same
+weeks, mandi activity and the export-policy regime. I compared it with two baselines on
+2024–2026 data it never saw. It beats "no change" at every horizon, but honestly by only about
+5% of the error, because weekly prices are mostly persistent. The 80% band was too narrow at
+first (75% coverage), so I calibrated it on a held-out year (conformal prediction) to 79.9%.
+To do much better it needs supply data, i.e. arrival quantities, which the API doesn't expose.
+
+**7. How does the daily refresh work without your laptop?**
+A GitHub Actions cron job starts a small EC2 instance in Mumbai (the API is geo-blocked), opens
+SSH only for the runner's IP, and tunnels the API calls through it. It runs the same ingest,
+Spark, dbt and quality-gate code against a DuckDB "lite lake" in S3 that stands in for the
+Iceberg catalog, publishes the dashboard extract only if the gate passes, then closes the IP
+rule and stops the instance. I checked that its output is identical to the full warehouse.
