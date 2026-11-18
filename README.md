@@ -9,9 +9,9 @@ It ingests every commodity Agmarknet reports (all states, about 10–21k rows a 
 models it with dbt on DuckDB, gates every layer with data-quality checks, and serves a
 Streamlit dashboard. Everything runs on one laptop with `make up`, at $0.
 
-> Status (2026-11-17): every component is built and tested end to end on real data. The
-> 2015→2026 backfill is running, and the basmati variety mapping is waiting for human
-> review, so the headline numbers and resume metrics below are **pending** until both finish.
+> Status (2026-11-18): built and run end to end on the full history: 55.4M raw rows,
+> 4,339 days (2015-01-01 → 2026-11-17), every quality gate passing. Measured results and the
+> basmati-vs-MEP analysis are in [RESULTS.md](RESULTS.md).
 
 ## Architecture
 
@@ -58,7 +58,7 @@ Prerequisites: Docker (Docker Desktop or Colima, ~8 GB RAM for the VM), [uv](htt
 cp .env.example .env              # add DATA_GOV_IN_API_KEY, resource ids, AIRFLOW_JWT_SECRET
 make setup                        # local Python env (uv)
 make up                           # Postgres, MinIO, Iceberg REST catalog, Airflow 3
-make test                         # 37 unit tests (ingestion, Spark transform, mapping, weather)
+make test                         # 39 unit tests (ingestion, Spark transform, mapping, weather)
 ```
 
 Outside India, start the Mumbai proxy first ([docs/INDIA_PROXY_AWS.md](docs/INDIA_PROXY_AWS.md)) and set `AGMARKNET_PROXY=socks5h://127.0.0.1:1080`.
@@ -134,6 +134,7 @@ FROM lake.silver.daily_price VERSION AS OF <first_snapshot_id>;
 - **Rounding inconsistencies:** a handful of rows where min > modal by under 1 paisa, because the source rounds modal but not min/max. The check uses a 1-paisa tolerance.
 - **Invalid dates crash Spark 4.** ANSI mode made `to_date('31/02/2023')` fail the whole job. A unit test caught it; the transform uses `try_to_date`.
 - **Unmapped basmati names fail the warehouse gate**, which lists them (e.g. `Rice | Basumathi`, `Rice | Basamti Dawat`), and the dashboard stays on the last good build.
+- **Only at full scale (55M rows):** dbt was OOM-killed until DuckDB was capped at 3 GB and staging materialised; a uniqueness test caught `Kutki`/`kutki` creating duplicate commodity ids; raw-vs-silver reconciliation found 65 days lost to port exhaustion during the backfill. All in [docs/TROUBLESHOOTING_LOG.txt](docs/TROUBLESHOOTING_LOG.txt).
 
 ## Measured results
 
@@ -143,11 +144,14 @@ FROM lake.silver.daily_price VERSION AS OF <first_snapshot_id>;
 | Silver transform, 8 days / 124k rows | 14.1 s (Spark local mode, includes JVM start) |
 | API throughput (Mumbai proxy) | ~1.05 s per 1,000 rows; page size 5,000 |
 | Backfill speed | ~30 s/day with one caller; two concurrent callers after that |
-| Data-quality checks | 10 lake checks + 2 warehouse checks per run (GX), 64 dbt tests incl. 3 unit tests |
-| Rows ingested in total, years backfilled, markets, varieties mapped | **pending: backfill running** |
-| End-to-end daily run, full backfill runtime | **pending** |
-| Share of LLM suggestions accepted unchanged | **pending: human review** |
-| Headline: basmati price before vs after each MEP change | **pending**, see [RESULTS.md](RESULTS.md) once built |
+| Data-quality checks | 10 lake checks + 2 warehouse checks per run (GX), 64 dbt checks (42 data tests, 3 unit tests, contracts) |
+| Rows ingested | **55,365,892** raw → **55,147,964** silver (repeats combined; every raw row accounted for) |
+| History | **4,339** days (2015-01-01 → 2026-11-17), **8,325** markets, **421** commodities, **34** states/UTs |
+| Full backfill | **4,330** Airflow runs, **0 failed**, 16 h 45 min wall clock (2 concurrent, via proxy), median 10.1 s per day |
+| Warehouse build on the full history | dbt **113 s** + quality gate 16 s + publish 24 s |
+| Basmati varieties mapped | 69 names; **97.1%** of LLM suggestions accepted unchanged by the reviewer |
+| Headline | 1121 basmati paddy **+21.0%** (60 days after the Aug 2023 MEP) and **+28.7%** (after the Oct 2023 cut), vs −8.0% and +4.6% in the same weeks of 2022. Not causal: see [RESULTS.md](RESULTS.md) |
+| End-to-end scheduled daily run | not measured yet (proxy stopped after the backfill) |
 
 ## Repository layout
 
@@ -158,5 +162,5 @@ dbt/             staging / intermediate / marts, seeds, snapshot, unit tests
 dashboard/       Streamlit app
 scripts/         proxy, source probe, LLM variety mapping, CI fixture builder
 docker/          Airflow (+ Spark jars, analytics venv), MinIO from source, Iceberg REST
-docs/            source verification (Step 0), design decisions, proxy setup
+docs/            source verification (Step 0), design decisions, proxy setup, troubleshooting log
 ```
