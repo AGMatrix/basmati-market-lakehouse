@@ -9,7 +9,13 @@ basmati:
     dev:
       type: duckdb
       path: "{{ env_var('DUCKDB_PATH', '../data/warehouse.duckdb') }}"
-      threads: 4
+      # Full history is ~60M rows. DuckDB defaults to 80% of RAM per connection, and with
+      # 4 dbt threads in the 8 GB Docker VM the kernel OOM-killed the build. Cap memory
+      # (DuckDB spills to disk past it) and run two models at a time.
+      threads: 2
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '3GB') }}"
+        preserve_insertion_order: false
       extensions: [httpfs, iceberg]
       secrets:
         - type: s3

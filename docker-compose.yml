@@ -66,6 +66,13 @@ x-airflow-common: &airflow-common
     - ./gx:/opt/project/gx
   extra_hosts:
     - "host.docker.internal:host-gateway"
+  # Spark, dbt and ingestion open many short S3 connections to MinIO. Closed ports wait
+  # ~60 s in TIME_WAIT, and during the full backfill the default ~28k ports ran out
+  # ("Cannot assign requested address"). Allow safe reuse for outgoing connections and
+  # widen the range. Both are per-container network settings.
+  sysctls:
+    net.ipv4.tcp_tw_reuse: 1
+    net.ipv4.ip_local_port_range: "1024 65000"
 
 services:
   postgres:

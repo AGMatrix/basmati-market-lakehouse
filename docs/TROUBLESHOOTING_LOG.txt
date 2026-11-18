@@ -646,6 +646,132 @@ LESSON
 
 
 =============================================================================
+AFTER THE FULL BACKFILL (problems that only appear at full scale)
+=============================================================================
+
+#27  62 silver runs failed: "Cannot assign requested address"
+----------------------------------------------------------------------------
+WHAT FAILED
+  The backfill itself succeeded (4,334 days), but 62 of the silver_daily_price runs
+  that it triggered failed while Spark was writing to MinIO:
+    java.net.BindException: Cannot assign requested address
+  As a result, 65 days existed in raw but were missing from the silver Iceberg table.
+
+WHY
+  Every network connection uses a "port" number on your side as well as the server's.
+  Linux hands these out from a limited range (32768-60999 in this container, about
+  28,000 ports). After a connection closes, its port is held for about a minute
+  (a state called TIME_WAIT) before it can be reused.
+  During the backfill, all of these ran in the same container at the same time:
+  ingestion PUTs, Spark writing many Parquet files (one S3 connection per upload part),
+  and dbt reading the lake over S3. They opened connections faster than closed
+  ports were freed. Once the range was used up, the operating system could not
+  "assign" an address for a new connection, and the write failed.
+  The error is about our side running out of ports, not about MinIO being down.
+
+FIX
+  1. Found exactly which days were missing: listed the raw days (4,339) and the
+     distinct days in silver (4,274), and took the difference (65 days).
+  2. Re-ran silver for just those 65 days, with a manual trigger
+     (conf {"days": [...]}), while nothing else was running.
+  3. Paused warehouse_build during this so it would not compete (see #28).
+  4. Prevented a repeat, in docker-compose.yml (sysctls for the Airflow containers):
+       net.ipv4.tcp_tw_reuse = 1            allow reusing a TIME_WAIT port for a new
+                                            outgoing connection (it was 2 = only for
+                                            local connections)
+       net.ipv4.ip_local_port_range = 1024 65000   ~64k ports instead of ~28k
+
+  Q: Why not shorten the 60-second wait? Isn't it a bug?
+  A: It is not a bug. TIME_WAIT is a TCP safety feature: packets from the old
+     connection may still be in transit, and if the port were reused right away
+     they could be mixed into the new connection. On Linux the 60 s is fixed in the
+     kernel. The right tools are safe reuse (tcp_tw_reuse), more ports, and above
+     all reusing connections (connection pooling / keep-alive), so fewer are opened.
+     The real cause was running three heavy jobs at once in one container.
+
+REASONING
+  Silver writes are idempotent: overwrite(condition) replaces each day atomically
+  (entry #13), so re-running a day is always safe. Re-running only the 65 missing days
+  is much cheaper than rebuilding all 12 years. Comparing raw and silver was more
+  reliable than reading 62 failed run logs, and also catches any day that failed
+  without leaving a clear failed run.
+
+LESSON
+  - "Cannot assign requested address" = the client ran out of local ports (too many
+    short-lived connections), not a server problem.
+  - After a large backfill, reconcile layers (raw days vs silver days). "All
+    ingestion runs succeeded" does not mean every downstream step did.
+  - Idempotent, per-partition writes make recovery a simple re-run.
+
+
+#28  warehouse_build: dbt killed with SIGKILL (out of memory)
+----------------------------------------------------------------------------
+WHAT FAILED
+  Every warehouse_build run during the backfill failed. Early on the errors varied
+  (MinIO connection errors, failing tests); at full size the dbt process was simply
+  killed: "Negsignal.SIGKILL: 9".
+
+WHY
+  SIGKILL with no Python error almost always means Linux's out-of-memory (OOM) killer
+  stopped the process to protect the machine. Three things together used too much RAM:
+  - DuckDB lets each database use up to 80% of the machine's RAM by default (about
+    6.2 GB of the 7.7 GB VM), but Airflow, Spark and MinIO need memory as well.
+  - dbt ran 4 models/tests at the same time (threads: 4).
+  - The staging model was a VIEW over the Iceberg table. A view stores no data, so
+    every test and every model built on it re-read all ~60 million rows from MinIO.
+    Dozens of full scans, 4 at a time.
+  With a few days of data during development this never showed up. With 12 years it did.
+  Every new silver run also triggered another warehouse build, so they kept piling up.
+
+FIX
+  - profiles.yml: DuckDB memory_limit 3GB (DuckDB "spills" to temporary files on disk
+    when it needs more, rather than crashing), preserve_insertion_order false (lets
+    DuckDB use less memory when row order does not matter), and dbt threads 2.
+  - stg_agmarknet__daily_price is now a TABLE: the lake is read once per build,
+    and every test and model reads the local copy.
+
+REASONING
+  Capping memory turns "killed" into "a bit slower". Materialising the staging layer
+  is the standard fix when many things read the same expensive source. The cost is
+  disk space and a full copy on each build; incremental models would be the next step
+  if build time became a problem.
+
+LESSON
+  - SIGKILL / exit code -9 / 137 = out of memory. Look at memory settings first.
+  - Always test with realistic data volume. Settings that work on 8 days can fail on
+    12 years.
+  - Views are free to create but are re-computed on every read.
+
+
+#29  dbt test failed: "unique_dim_commodity_commodity_id" (FAIL 2)
+----------------------------------------------------------------------------
+WHAT FAILED
+  With 12 years loaded, the uniqueness test on dim_commodity found 2 ids appearing
+  twice.
+
+WHY
+  commodity_id is md5(lower(name)), so "Kutki" and "kutki" get the same id. The
+  model grouped by (commodity_id, commodity), and the source used both spellings:
+  "Kutki" on 2,230 rows and "kutki" on 7; "Tulip" 79 and "tulip" 71. Two spellings
+  meant two rows with one id. In 8 days of test data, no commodity changed case, so
+  the bug was invisible.
+
+FIX
+  Group by commodity_id only, and take the display name as mode(commodity), the
+  spelling used on the most rows. The flags use bool_or(...).
+
+REASONING
+  The id already treats case as irrelevant (it lowercases), so the dimension must
+  do the same: one row per id. The test did its job: it stopped a duplicate key
+  that would have doubled those commodities' prices in any join.
+
+LESSON
+  - Group a dimension by its key only; pick display attributes with an aggregate.
+  - Uniqueness tests on dimension keys catch silent join explosions.
+  - Real-world data has inconsistencies that only appear at full volume.
+
+
+=============================================================================
 STILL OPEN (not fixed yet)
 =============================================================================
 
@@ -667,3 +793,6 @@ SMALL ONES (my own scripting slips, fixed in seconds)
     ("  airflow-init:" also appears inside depends_on) and duplicated a block; caught by
     `docker compose config`, then fixed. Lesson: validate config after scripted edits.
   - Ruff (the linter) flagged long lines and an unused loop variable; fixed as reported.
+  - .env: the API key was saved as "ANTHROPIC_API_KEY= sk-ant-..." (a space after the
+    "="). Some .env readers keep that space as part of the value, so the key would be
+    rejected. Removed the space. Lesson: in .env files, write KEY=value with no spaces.
