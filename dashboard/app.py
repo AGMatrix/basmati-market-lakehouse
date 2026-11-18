@@ -362,24 +362,61 @@ else:
         hide_index=True, width="stretch",
     )  # fmt: skip
 
-# --- 4. markets -----------------------------------------------------------------------------
-st.subheader("Markets: latest basmati prices")
-markets = query(
-    f"""
-    select m.state, m.district, m.market, v.variety_group, v.form,
-           max(f.arrival_date) as last_trade, arg_max(f.modal_price, f.arrival_date) as last_modal,
-           count(*) as market_days
+# --- 4. mandi prices, portal style ---------------------------------------------------------
+st.subheader("Mandi prices by state")
+reports = query(
+    """
+    with last as (select max(arrival_date) as d from marts.fct_daily_price)
+    select f.arrival_date, m.state, m.district, m.market, v.commodity, f.raw_variety,
+           v.variety_group, f.grade, f.min_price, f.max_price, f.modal_price
     from marts.fct_daily_price f
     join marts.dim_variety v using (variety_id)
-    join marts.dim_market m using (market_version_id)
-    where v.is_basmati and v.form = '{form}'
-    group by all order by last_trade desc, market_days desc
-    """  # noqa: S608 (form comes from a fixed two-option control)
+    join marts.dim_market m using (market_version_id), last
+    where v.is_basmati and f.arrival_date > last.d - 90
+    """
 )
-if state != "All states":
-    markets = markets[markets["state"] == state]
-markets = by_variety(markets)
-st.dataframe(markets, hide_index=True, width="stretch")
+reports["arrival_date"] = pd.to_datetime(reports["arrival_date"]).dt.date
+m1, m2, m3 = st.columns([2, 2, 3])
+report_states = sorted(reports["state"].unique())
+default_state = state if state in report_states else "Punjab"
+mandi_state = m1.selectbox(
+    "State", report_states, key="mandi_state",
+    index=report_states.index(default_state) if default_state in report_states else 0,
+)  # fmt: skip
+in_state = reports[reports["state"] == mandi_state]
+district = m2.selectbox("District", ["All districts", *sorted(in_state["district"].unique())])
+days = m3.segmented_control("Reported in the last (days)", [1, 7, 30, 90], default=30) or 30
+as_of = reports["arrival_date"].max()
+rows = in_state[in_state["arrival_date"] > as_of - pd.Timedelta(days=days)]
+if district != "All districts":
+    rows = rows[rows["district"] == district]
+rows = by_variety(rows)
+# Latest report per mandi x commodity x variety x grade, like the portal's daily listing.
+latest = (
+    rows.sort_values("arrival_date")
+    .groupby(["market", "commodity", "raw_variety", "grade"], as_index=False)
+    .last()
+    .sort_values(["district", "market", "commodity", "raw_variety"])
+)
+if latest.empty:
+    st.info(
+        f"No basmati reports from {mandi_state} in the {days}-day window ending {as_of:%d %b %Y}."
+    )
+else:
+    st.caption(
+        f"{latest['market'].nunique()} mandis in {mandi_state}: each one's latest basmati report "
+        f"in the {days} days to {as_of:%d %b %Y} (the newest data loaded). Agmarknet publishes "
+        "daily reports, not live quotes; the pipeline adds a new day each evening while it runs. "
+        "Prices in Rs per quintal."
+    )
+    st.dataframe(
+        latest[["arrival_date", "district", "market", "commodity", "raw_variety", "grade",
+                "min_price", "max_price", "modal_price"]].rename(columns={
+            "arrival_date": "Price date", "district": "District", "market": "Market",
+            "commodity": "Commodity", "raw_variety": "Variety", "grade": "Grade",
+            "min_price": "Min price", "max_price": "Max price", "modal_price": "Modal price"}),
+        hide_index=True, width="stretch",
+    )  # fmt: skip
 
 st.caption(
     "Exports by destination are not shown: the APEDA / DGCI&S monthly-by-country source is "

@@ -86,7 +86,9 @@ unreachable, the app falls back to the snapshot committed in `dashboard/demo/`
 `dashboard/requirements.txt`, not the full pipeline). The dashboard has four sections: weekly
 prices with MEP markers, before/after each MEP change, **where to buy now** (each market's
 latest report in the last 14 days, cheapest per variety, with prices more than 30% below the
-median flagged for checking rather than picked), and a market table. Prices are daily
+median flagged for checking rather than picked), and **mandi prices by state** (portal-style:
+pick a state and district to list every mandi's latest report with min / max / modal price).
+A variety filter narrows every section to one variety. Prices are daily
 Agmarknet reports, not live quotes.
 
 Airflow UI: http://localhost:8080 · MinIO console: http://localhost:9001 · quality reports: `reports/quality/*_latest.md`.
