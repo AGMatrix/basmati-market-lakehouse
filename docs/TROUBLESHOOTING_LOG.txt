@@ -796,3 +796,9 @@ SMALL ONES (my own scripting slips, fixed in seconds)
   - .env: the API key was saved as "ANTHROPIC_API_KEY= sk-ant-..." (a space after the
     "="). Some .env readers keep that space as part of the value, so the key would be
     rejected. Removed the space. Lesson: in .env files, write KEY=value with no spaces.
+  - make map-suggest: "KeyError: MINIO_ROOT_USER". The script runs on the Mac, not in
+    Docker, so it did not see the variables in .env (docker compose loads .env for
+    containers only). Fixed with "uv run --env-file .env" in the Makefile.
+  - make map-suggest: "Your credit balance is too low" from the Anthropic API. An API
+    key works only once the account has prepaid credits (separate from a claude.ai
+    subscription). Not a code problem: add credits under Settings -> Billing.
