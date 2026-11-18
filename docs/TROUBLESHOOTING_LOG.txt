@@ -834,3 +834,9 @@ SMALL ONES (my own scripting slips, fixed in seconds)
   - make map-suggest: "Your credit balance is too low" from the Anthropic API. An API
     key works only once the account has prepaid credits (separate from a claude.ai
     subscription). Not a code problem: add credits under Settings -> Billing.
+  - S3 setup: the `basmati` AWS user got AccessDenied on s3:ListAllMyBuckets and IAM calls.
+    That user is deliberately limited to the EC2 proxy (least privilege), so the bucket and
+    the two narrow keys are created by an admin in the console (docs/HOSTED_DASHBOARD.md).
+  - Testing the hosted fallback, a "bad S3 key" test showed no warning: Streamlit's
+    @st.cache_resource had kept the result of the earlier "no secrets" run in the same
+    process. A fresh process showed the warning. Lesson: caches carry state between tests.
