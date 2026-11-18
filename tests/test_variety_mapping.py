@@ -51,6 +51,8 @@ def test_merge_appends_only_approved_and_logs_acceptance(paths):
     ])  # fmt: skip
     vm.cmd_merge(None)
     seed = list(csv.DictReader(vm.SEED.open()))
+    # Same line ending as the header: DuckDB's CSV sniffer rejects a file mixing \n and \r\n.
+    assert b"\r" not in vm.SEED.read_bytes()
     assert [(r["raw_variety"], r["mapped_by"]) for r in seed] == [
         ("1121", "llm_accepted"),
         ("Pusa 1509", "llm_edited"),

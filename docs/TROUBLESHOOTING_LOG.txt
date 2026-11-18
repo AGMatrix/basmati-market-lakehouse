@@ -771,6 +771,38 @@ LESSON
   - Real-world data has inconsistencies that only appear at full volume.
 
 
+#30  dbt seed failed after merging the mappings: "Error when sniffing file"
+----------------------------------------------------------------------------
+WHAT FAILED
+  After `make map-merge` added 69 approved rows, `dbt seed` failed on
+  basmati_variety_map.csv with "Invalid Input Error: Error when sniffing file".
+
+WHY
+  Text files mark the end of a line with invisible characters: "\n" on Mac/Linux,
+  "\r\n" on Windows. The header line (written by me earlier) ended with "\n".
+  Python's csv module writes "\r\n" by default, so all 69 new rows ended with
+  "\r\n". DuckDB "sniffs" a CSV (guesses delimiter, quoting and line ending from the
+  first lines), and a file mixing two line endings confused it.
+  The unit test never caught it because it only checked the parsed values, which
+  Python reads correctly either way.
+
+FIX
+  - scripts/variety_mapping.py: csv.DictWriter(..., lineterminator="\n").
+  - Converted the existing seed file to "\n" only.
+  - Added a test assertion that the merged seed contains no "\r".
+
+REASONING
+  Fix the writer (the cause), not the reader (e.g. telling DuckDB to ignore errors,
+  which could silently drop rows). The test checks bytes, because the problem is
+  invisible once a lenient reader has parsed the file.
+
+LESSON
+  - Line endings are invisible but real. Python's csv writer defaults to "\r\n".
+  - When appending to a file, match the format already in it.
+  - Test the actual consumer (here DuckDB/dbt) or the exact bytes, not only a lenient
+    reader.
+
+
 =============================================================================
 STILL OPEN (not fixed yet)
 =============================================================================

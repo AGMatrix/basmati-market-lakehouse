@@ -200,7 +200,7 @@ def cmd_merge(_args) -> None:
             "mapped_by": "llm_accepted" if same else "llm_edited", "reviewed_on": today,
         })  # fmt: skip
     with SEED.open("a", newline="") as fh:
-        csv.DictWriter(fh, fieldnames=SEED_COLUMNS).writerows(new)
+        csv.DictWriter(fh, fieldnames=SEED_COLUMNS, lineterminator="\n").writerows(new)
     stats = {
         "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "model": MODEL,

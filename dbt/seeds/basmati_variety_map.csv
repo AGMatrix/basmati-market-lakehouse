@@ -1,1 +1,70 @@
 commodity,raw_variety,is_basmati,variety_group,form,processing,mapped_by,reviewed_on
+Paddy(Dhan)(Basmati),Basmati 1509,True,1509,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Basmati),1121,True,1121,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),1121,True,1121,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Sona Mansoori Non Basmati,False,Not Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Dhan)(Basmati),Sugandha,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),Basmati 1509,True,1509,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),D.B.,False,Not Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Basmati),Basumathi,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),Sugandha,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),Basmati,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Basmati),Basmati 1509,True,1509,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Basmati),Basmati,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Fine(Basmati),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Common),D.B.,False,Not Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Basmati),1121,True,1121,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Basmati),SuperFine(Basmati),True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),Basmati 1509,True,1509,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Basmati),SuperFine(Basmati),True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Kachha Basmati,True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Basmati Paddy,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),1121,True,1121,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),SuperFine(Basmati),True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),SuperFine(Basmati),True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),Sugandha,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Pusa Basmati Raw (Old),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Pusa Basmati Raw (New),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Basmati Dawat,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Common),1718,True,1718,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Basmati U.P. (New),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basamti Dawat,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Basmati),Other,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Basmati),Sugandha,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati-370,True,Traditional,rice,unknown,llm_accepted,2026-11-17
+Paddy(Common),1847,True,1847,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),1692,True,1692,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Common),1886,True,1886,paddy,not_applicable,llm_accepted,2026-11-17
+Paddy(Dhan)(Common),Dehradun,True,Traditional,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Amira Mogra Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Haryana Raw (New),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Basmati Golden Sela New,True,Other Basmati,rice,sella,llm_accepted,2026-11-17
+Paddy(Common),1885,True,1885,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Basmati Car,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati (Rose),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Mogra (Raw/Old),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Basmati Haryana Sela(New),True,Other Basmati,rice,sella,llm_accepted,2026-11-17
+Paddy(Dhan)(Basmati),Other,False,Not Basmati,paddy,not_applicable,llm_edited,2026-11-17
+Rice,Basmati Mogra (Raw/New),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Basmati Haryana Raw (Old),True,Other Basmati,rice,raw,llm_accepted,2026-11-17
+Rice,Amira Tibar Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Super Kohinoor,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Amire Full Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Trophy,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Common),Dehradun,True,Traditional,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Basmati Charmi,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Pusa Basmati Sela (Old),True,Other Basmati,rice,sella,llm_accepted,2026-11-17
+Paddy(Basmati),Local,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-17
+Rice,Ambemohor Basmati,False,Not Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Golden Sela Old,True,Other Basmati,rice,sella,llm_accepted,2026-11-17
+Rice,Basmati Silky Kohinoor,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Original Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Amras Non Basmati,False,Not Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati Dawat Roz-(20KG),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Doon Kinki Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Hallo Tibar Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Dhoon Tibar Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Basmati U.P. (Old),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
+Rice,Hmt Rice-Non Basmati,False,Not Basmati,rice,unknown,llm_accepted,2026-11-17
+Paddy(Basmati),Hybrid,False,Not Basmati,paddy,not_applicable,llm_edited,2026-11-17
