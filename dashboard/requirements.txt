@@ -1,0 +1,6 @@
+# Only what the hosted dashboard needs (Streamlit Community Cloud reads this file).
+# The full pipeline's dependencies are in pyproject.toml / uv.lock.
+streamlit==1.66.1
+altair==6.3.0
+duckdb==1.5.6
+pandas==3.1.0

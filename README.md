@@ -72,6 +72,18 @@ make map-merge && make rebuild-warehouse
 make dashboard                    # http://localhost:8501
 ```
 
+### Hosted demo (no Docker needed)
+
+`dashboard/demo/basmati_demo.duckdb` (3.2 MB) is a basmati-only snapshot of the published
+warehouse (138k rows, 891 markets), rebuilt with `make demo-db`. With no local warehouse the
+app falls back to it, so it runs on [Streamlit Community Cloud](https://share.streamlit.io):
+**New app → this repo, branch `main`, file `dashboard/app.py`** (it installs
+`dashboard/requirements.txt`, not the full pipeline). The dashboard has four sections: weekly
+prices with MEP markers, before/after each MEP change, **where to buy now** (each market's
+latest report in the last 14 days, cheapest per variety, with prices more than 30% below the
+median flagged for checking rather than picked), and a market table. Prices are daily
+Agmarknet reports, not live quotes.
+
 Airflow UI: http://localhost:8080 · MinIO console: http://localhost:9001 · quality reports: `reports/quality/*_latest.md`.
 
 ## Data sources

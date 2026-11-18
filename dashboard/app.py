@@ -16,7 +16,11 @@ import pandas as pd
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
-DB = Path(os.environ.get("SERVING_DB", ROOT / "data" / "warehouse_serving.duckdb"))
+SERVING = ROOT / "data" / "warehouse_serving.duckdb"
+# Hosted demo (Streamlit Community Cloud) has no lake: fall back to the small basmati-only
+# snapshot committed in dashboard/demo/ (rebuilt with `make demo-db`).
+DEMO = ROOT / "dashboard" / "demo" / "basmati_demo.duckdb"
+DB = Path(os.environ.get("SERVING_DB") or (SERVING if SERVING.exists() else DEMO))
 
 # Reference categorical palette, validated (light + dark) with the dataviz validator.
 # Each variety group owns a fixed slot, so filtering never repaints the remaining series.
@@ -98,6 +102,11 @@ prices["variety_group"] = prices["variety_group"].where(
 
 # --- filters: one row above the charts ------------------------------------------------------
 st.title("Basmati prices vs export policy")
+if DB == DEMO:
+    st.info(
+        "Demo snapshot: basmati rows from the full 55M-row warehouse, exported on the date of "
+        "the latest data shown. Source and pipeline: github.com/AGMatrix/basmati-market-lakehouse"
+    )
 st.caption(
     "Agmarknet daily mandi prices (Rs per quintal), weekly average of market-day modal prices. "
     "Vertical lines mark Minimum Export Price (MEP) changes."
@@ -121,6 +130,14 @@ weekly = (
     .sum()
 )
 weekly["modal_price"] = weekly["w"] / weekly["market_days"]
+# Weeks with no reports become explicit gaps (null), so the line breaks instead of drawing a
+# smooth curve through months with no data.
+if not weekly.empty:
+    spine = pd.MultiIndex.from_product(
+        [pd.date_range(weekly["week"].min(), weekly["week"].max(), freq="W-MON"),
+         weekly["variety_group"].unique()], names=["week", "variety_group"],
+    )  # fmt: skip
+    weekly = weekly.set_index(["week", "variety_group"]).reindex(spine).reset_index()
 
 # --- 1. price trend with MEP markers --------------------------------------------------------
 st.subheader("Weekly modal price by variety")
@@ -130,9 +147,10 @@ base = alt.Chart(weekly).encode(
     y=alt.Y("modal_price:Q", title="Rs per quintal", scale=alt.Scale(zero=False)),
     color=alt.Color("variety_group:N", scale=colors, title="Variety group"),
 )
-lines = base.mark_line(strokeWidth=2, interpolate="monotone")
+lines = base.mark_line(strokeWidth=2, invalid=None)  # null -> break the path
 points = (
-    base.mark_point(size=64, filled=True, strokeWidth=2, stroke="white")
+    base.transform_filter("isValid(datum.modal_price)")
+    .mark_point(size=64, filled=True, strokeWidth=2, stroke="white")
     .encode(
         opacity=alt.condition(hover, alt.value(1), alt.value(0)),
         tooltip=[
@@ -148,7 +166,9 @@ crosshair = (
     alt.Chart(weekly).mark_rule(color=ink["axis"]).encode(x="week:T").transform_filter(hover)
 )
 events["event_date"] = pd.to_datetime(events["event_date"])
-ev = events[events["event_date"].between(pd.Timestamp(start), pd.Timestamp(end))]
+ev = events[events["event_date"].between(pd.Timestamp(start), pd.Timestamp(end))].copy()
+# Events can be weeks apart (Aug and Oct 2023): stagger the labels so they never overlap.
+ev["label_y"] = [8 + 14 * (i % 2) for i in range(len(ev))]
 rules = alt.Chart(ev).mark_rule(color=ink["muted"], strokeDash=[4, 4], strokeWidth=1).encode(
     x="event_date:T",
     tooltip=[alt.Tooltip("event_id:N", title="Event"), alt.Tooltip("event_date:T", title="Date"),
@@ -156,8 +176,8 @@ rules = alt.Chart(ev).mark_rule(color=ink["muted"], strokeDash=[4, 4], strokeWid
 )  # fmt: skip
 labels = (
     alt.Chart(ev)
-    .mark_text(align="left", dx=4, dy=-6, color=ink["text"], fontSize=11)
-    .encode(x="event_date:T", y=alt.value(0), text="event_type:N")
+    .mark_text(align="left", dx=4, dy=0, color=ink["text"], fontSize=11)
+    .encode(x="event_date:T", y=alt.Y("label_y:Q", scale=None), text="event_type:N")
 )
 st.altair_chart(style(alt.layer(lines, points, crosshair, rules, labels).properties(height=380)),
                 width="stretch")  # fmt: skip
@@ -199,7 +219,73 @@ else:
         "the overlap of the Aug and Oct 2023 windows also move prices."
     )
 
-# --- 3. markets -----------------------------------------------------------------------------
+# --- 3. where to buy now --------------------------------------------------------------------
+st.subheader("Where to buy now: cheapest recent prices by variety")
+recent = query(
+    f"""
+    with last as (select max(arrival_date) as d from marts.fct_daily_price),
+    latest as (  -- each market's most recent report per variety in the last 14 days
+        select v.variety_group, m.state, m.district, m.market, f.grade,
+               f.arrival_date, f.min_price, f.modal_price, f.max_price,
+               row_number() over (partition by v.variety_group, f.market_id
+                                  order by f.arrival_date desc) as rn
+        from marts.fct_daily_price f
+        join marts.dim_variety v using (variety_id)
+        join marts.dim_market m using (market_version_id), last
+        where v.is_basmati and v.form = '{form}' and f.arrival_date > last.d - 14
+    )
+    select * exclude (rn) from latest where rn = 1
+    """  # noqa: S608 (form comes from a fixed two-option control)
+)
+if state != "All states":
+    recent = recent[recent["state"] == state]
+if recent.empty:
+    st.info("No basmati reports in the last 14 days for this form and state.")
+else:
+    as_of = pd.to_datetime(recent["arrival_date"]).max().date()
+    st.caption(
+        f"Latest reported mandi prices, as of {as_of:%d %b %Y} (each market's most recent "
+        "report in the last 14 days). Agmarknet publishes daily reports, not live quotes, so "
+        "this is the most recent data, not a real-time price. Modal = the most common traded "
+        "price. Grade, moisture, transport and mandi fees also change the real cost."
+    )
+    # A report far below the variety's median is usually another grade, broken grains or a
+    # data-entry slip, not a bargain: flag it, and pick "cheapest" among the rest.
+    median = recent.groupby("variety_group")["modal_price"].transform("median")
+    recent["check"] = (recent["modal_price"] < 0.7 * median).map(
+        {True: "verify: >30% below median", False: ""}
+    )
+    plausible = recent[recent["check"] == ""]
+    cheapest = plausible.loc[plausible.groupby("variety_group")["modal_price"].idxmin()]
+    summary = (
+        recent.groupby("variety_group")
+        .agg(markets=("market", "nunique"), median_modal=("modal_price", "median"),
+             flagged=("check", lambda c: (c != "").sum()))
+        .join(cheapest.set_index("variety_group")[["market", "state", "modal_price",
+                                                     "arrival_date"]])
+        .rename(columns={"market": "cheapest_market", "modal_price": "cheapest_modal",
+                         "arrival_date": "reported_on"})
+        .reset_index()
+    )  # fmt: skip
+    summary["saving_vs_median_%"] = (
+        100 * (summary["median_modal"] - summary["cheapest_modal"]) / summary["median_modal"]
+    ).round(1)
+    st.dataframe(summary.round({"median_modal": 0, "cheapest_modal": 0}), hide_index=True,
+                 width="stretch")  # fmt: skip
+    st.caption(
+        "flagged = markets whose latest price is over 30% below the variety's median; they "
+        "are listed below with a 'verify' note but not picked as cheapest."
+    )
+    pick = st.selectbox("Cheapest markets for variety", sorted(recent["variety_group"].unique()))
+    st.dataframe(
+        recent[recent["variety_group"] == pick]
+        .sort_values("modal_price")
+        .head(10)[["market", "district", "state", "grade", "arrival_date",
+                   "min_price", "modal_price", "max_price", "check"]],
+        hide_index=True, width="stretch",
+    )  # fmt: skip
+
+# --- 4. markets -----------------------------------------------------------------------------
 st.subheader("Markets: latest basmati prices")
 markets = query(
     f"""

@@ -1,7 +1,7 @@
 # Common tasks. `make help` lists them.
 COMPOSE := docker compose
 
-.PHONY: help setup lint fmt test build up down logs ps run-day backfill rebuild-silver rebuild-warehouse map-suggest map-merge dashboard
+.PHONY: help setup lint fmt test build up down logs ps run-day backfill rebuild-silver rebuild-warehouse map-suggest map-merge demo-db dashboard
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -60,6 +60,9 @@ map-suggest:  ## LLM suggestions for unmapped basmati names -> review/variety_su
 
 map-merge:  ## Merge rows you approved in review/variety_suggestions.csv into the dbt seed
 	uv run --env-file .env python scripts/variety_mapping.py merge
+
+demo-db:  ## Export the small basmati-only snapshot used by the hosted dashboard
+	uv run python scripts/make_demo_db.py
 
 dashboard:  ## Open the Streamlit dashboard (reads the published serving copy)
 	uv run streamlit run dashboard/app.py

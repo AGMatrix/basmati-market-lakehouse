@@ -11,6 +11,7 @@ dbt/dbt_packages/
 dbt/logs/
 *.duckdb
 *.duckdb.wal
+!dashboard/demo/basmati_demo.duckdb
 gx/
 .DS_Store
 reports/
