@@ -803,6 +803,38 @@ LESSON
     reader.
 
 
+#31  Dashboard drew fake price crashes to zero
+----------------------------------------------------------------------------
+WHAT FAILED
+  After I "fixed" the chart so lines would break at weeks with no reports, the live
+  dashboard showed many vertical lines dropping to the bottom of the chart, and a flat
+  line along the bottom, as if prices had crashed to 0. They never did.
+
+WHY
+  My fix filled missing weeks with null and set the line mark's option invalid=None,
+  believing it meant "break the line at nulls". In Vega-Lite (the library behind Altair)
+  it means the opposite: "keep invalid values and treat them as ZERO". So every week with
+  no reports was drawn at price 0. My smoke test checked only that the app ran without
+  errors, not what the chart showed.
+
+FIX
+  Removed invalid=None. In pandas, each unbroken run of weeks gets its own "segment"
+  number, rows with no price are dropped, and the line encodes detail=segment. A line is
+  never drawn between segments, so gaps show as gaps and no zeros reach the chart.
+  Verified on the real data: the chart spec has no "invalid" setting and uses segments.
+
+REASONING
+  Shaping the data so the chart can't misdraw it is more reliable than depending on a
+  library option whose meaning varies between versions.
+
+LESSON
+  - "It runs" is not "it's right". For charts, check the plotted data (min/max, nulls),
+    and look at the result.
+  - Read the docs for an option's exact meaning; null/None often means "default" or
+    "zero", not "skip".
+  - A chart that invents a crash is worse than one with a visible gap.
+
+
 =============================================================================
 STILL OPEN (not fixed yet)
 =============================================================================

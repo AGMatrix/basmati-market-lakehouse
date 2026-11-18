@@ -25,12 +25,15 @@ DEMO = ROOT / "dashboard" / "demo" / "basmati_demo.duckdb"
 HOSTED = Path(tempfile.gettempdir()) / "basmati_hosted.duckdb"
 
 
-@st.cache_resource(ttl=3600)  # re-download at most hourly; the pipeline updates it daily
-def fetch_hosted() -> Path | None:
+def s3_config() -> dict | None:
     try:
-        cfg = st.secrets["s3"]
+        return dict(st.secrets["s3"])
     except (KeyError, FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
         return None
+
+
+@st.cache_resource(ttl=3600)  # re-download at most hourly; the pipeline updates it daily
+def fetch_hosted(cfg: dict) -> Path:
     import boto3
 
     s3 = boto3.client(
@@ -52,8 +55,14 @@ def pick_db() -> Path:
         return Path(os.environ["SERVING_DB"])
     if SERVING.exists():
         return SERVING
+    cfg = s3_config()
+    if cfg is None:  # not cached: secrets added later take effect on the next page load
+        print("data source: committed snapshot (no [s3] secrets)")
+        return DEMO
     try:
-        return fetch_hosted() or DEMO
+        path = fetch_hosted(cfg)
+        print(f"data source: s3://{cfg['bucket']}/{cfg.get('key', '')}")
+        return path
     except Exception as e:  # noqa: BLE001 (any S3 problem: show the committed snapshot)
         st.warning(f"Could not load the latest data from S3 ({type(e).__name__}); "
                    "showing the committed snapshot.")  # fmt: skip
@@ -147,30 +156,34 @@ prices["variety_group"] = prices["variety_group"].where(
 
 # --- filters: one row above the charts ------------------------------------------------------
 st.title("Basmati prices vs export policy")
-if DB in (DEMO, HOSTED):
-    st.info(
-        ("Daily extract published by the pipeline after its quality gates pass"
-         if DB == HOSTED else "Committed snapshot")
-        + ": basmati rows from the full 55M-row warehouse. "
-        "Pipeline: github.com/AGMatrix/basmati-market-lakehouse"
-    )  # fmt: skip
 st.caption(
     "Agmarknet daily mandi prices (Rs per quintal), weekly average of market-day modal prices. "
     "Vertical lines mark Minimum Export Price (MEP) changes."
 )
-c1, c2, c3 = st.columns([2, 2, 3])
+c1, c2, c3, c4 = st.columns([2, 2, 2, 3])
 form = c1.segmented_control("Form", ["paddy", "rice"], default="paddy")
 states = sorted(prices["state"].unique())
 state = c2.selectbox("State", ["All states", *states])
+groups = [g for g in GROUP_ORDER if g in set(prices.loc[prices["form"] == form, "variety_group"])]
+variety = c3.selectbox("Variety", ["All varieties", *groups])
 prices["week"] = pd.to_datetime(prices["week"])
 lo, hi = prices["week"].min().date(), prices["week"].max().date()
-start, end = c3.slider("Weeks", min_value=lo, max_value=hi, value=(lo, hi), format="YYYY-MM-DD")
+start, end = c4.slider("Weeks", min_value=lo, max_value=hi, value=(lo, hi), format="YYYY-MM-DD")
+
+
+def by_variety(df: pd.DataFrame, col: str = "variety_group") -> pd.DataFrame:
+    """Keep rows of the selected variety (groups outside GROUP_ORDER count as Other Basmati)."""
+    if variety == "All varieties":
+        return df
+    return df[df[col].where(df[col].isin(GROUP_ORDER), "Other Basmati") == variety]
+
 
 sel = prices[
     (prices["form"] == form) & prices["week"].between(pd.Timestamp(start), pd.Timestamp(end))
 ]
 if state != "All states":
     sel = sel[sel["state"] == state]
+sel = by_variety(sel)
 weekly = (
     sel.assign(w=sel["modal_price"] * sel["market_days"])
     .groupby(["week", "variety_group"], as_index=False)[["w", "market_days"]]
@@ -185,6 +198,12 @@ if not weekly.empty:
          weekly["variety_group"].unique()], names=["week", "variety_group"],
     )  # fmt: skip
     weekly = weekly.set_index(["week", "variety_group"]).reindex(spine).reset_index()
+    # Each unbroken run of weeks becomes its own line segment (Vega-Lite would otherwise either
+    # join across the gap or, with invalid=None, draw missing weeks as zero).
+    weekly["segment"] = weekly.groupby("variety_group")["modal_price"].transform(
+        lambda p: p.isna().cumsum()
+    )
+    weekly = weekly.dropna(subset=["modal_price"])
 
 # --- 1. price trend with MEP markers --------------------------------------------------------
 st.subheader("Weekly modal price by variety")
@@ -194,10 +213,9 @@ base = alt.Chart(weekly).encode(
     y=alt.Y("modal_price:Q", title="Rs per quintal", scale=alt.Scale(zero=False)),
     color=alt.Color("variety_group:N", scale=colors, title="Variety group"),
 )
-lines = base.mark_line(strokeWidth=2, invalid=None)  # null -> break the path
+lines = base.mark_line(strokeWidth=2).encode(detail="segment:N")
 points = (
-    base.transform_filter("isValid(datum.modal_price)")
-    .mark_point(size=64, filled=True, strokeWidth=2, stroke="white")
+    base.mark_point(size=64, filled=True, strokeWidth=2, stroke="white")
     .encode(
         opacity=alt.condition(hover, alt.value(1), alt.value(0)),
         tooltip=[
@@ -239,8 +257,15 @@ event = k1.selectbox("Event", events["event_id"], index=len(events) - 1)
 window = k2.segmented_control("Window (days)", [30, 60, 90], default=60)
 row = pv[(pv["event_id"] == event) & (pv["window_days"] == window)
          & (pv["state"] == (state if state != "All states" else "All India"))]  # fmt: skip
+row = by_variety(row)
 if row.empty:
-    st.info("No basmati prices in this window for the selected state.")
+    st.info(
+        "No prices for this selection around this event. The policy comparison covers 1121, "
+        "1509 and Other Basmati; 1718, 1885 and 1886 first appear in the data in June 2026, "
+        "after all three MEP changes."
+        if variety not in ("All varieties", "1121", "1509", "Other Basmati")
+        else "No basmati prices in this window for the selected state."
+    )
 else:
     long = row.melt(
         id_vars=["variety_group", "pct_change", "n_markets"],
@@ -286,6 +311,7 @@ recent = query(
 )
 if state != "All states":
     recent = recent[recent["state"] == state]
+recent = by_variety(recent)
 if recent.empty:
     st.info("No basmati reports in the last 14 days for this form and state.")
 else:
@@ -323,7 +349,11 @@ else:
         "flagged = markets whose latest price is over 30% below the variety's median; they "
         "are listed below with a 'verify' note but not picked as cheapest."
     )
-    pick = st.selectbox("Cheapest markets for variety", sorted(recent["variety_group"].unique()))
+    pick = (
+        st.selectbox("Cheapest markets for variety", sorted(recent["variety_group"].unique()))
+        if variety == "All varieties" or recent["variety_group"].nunique() > 1
+        else recent["variety_group"].iloc[0]
+    )
     st.dataframe(
         recent[recent["variety_group"] == pick]
         .sort_values("modal_price")
@@ -348,6 +378,7 @@ markets = query(
 )
 if state != "All states":
     markets = markets[markets["state"] == state]
+markets = by_variety(markets)
 st.dataframe(markets, hide_index=True, width="stretch")
 
 st.caption(
