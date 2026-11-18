@@ -41,6 +41,8 @@ def fetch_hosted() -> Path | None:
     )
     tmp = HOSTED.with_suffix(".tmp")
     s3.download_file(cfg["bucket"], cfg.get("key", "serving/basmati_demo.duckdb"), str(tmp))
+    with duckdb.connect(str(tmp), read_only=True) as con:  # reject a corrupt/partial file
+        con.sql("select count(*) from marts.fct_daily_price").fetchone()
     os.replace(tmp, HOSTED)
     return HOSTED
 
