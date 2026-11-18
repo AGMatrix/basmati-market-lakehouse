@@ -11,6 +11,10 @@ on:
       lookback_days:
         description: Days before yesterday to re-check
         default: "7"
+      force:
+        description: Rebuild all checked days even if unchanged (after re-seeding)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,6 +56,7 @@ jobs:
           PROJECT_ROOT: ${{ github.workspace }}
           AGMARKNET_PROXY: socks5h://127.0.0.1:1080
           LITE_LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
+          LITE_FORCE: ${{ inputs.force && '1' || '0' }}
           DATA_GOV_IN_API_KEY: ${{ secrets.DATA_GOV_IN_API_KEY }}
           AGMARKNET_HISTORY_RESOURCE_ID: ${{ secrets.AGMARKNET_HISTORY_RESOURCE_ID }}
           AGMARKNET_CURRENT_RESOURCE_ID: ${{ secrets.AGMARKNET_CURRENT_RESOURCE_ID }}

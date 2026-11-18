@@ -68,3 +68,6 @@ Rice,Dhoon Tibar Basmati,True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
 Rice,Basmati U.P. (Old),True,Other Basmati,rice,unknown,llm_accepted,2026-11-17
 Rice,Hmt Rice-Non Basmati,False,Not Basmati,rice,unknown,llm_accepted,2026-11-17
 Paddy(Basmati),Hybrid,False,Not Basmati,paddy,not_applicable,llm_edited,2026-11-17
+Paddy(Dhan)(Common),Basumathi,True,Other Basmati,paddy,not_applicable,llm_accepted,2026-11-18
+Rice,Basumathi,True,Other Basmati,rice,unknown,llm_accepted,2026-11-18
+Rice,Masoori-Non Basmti,False,Not Basmati,rice,unknown,llm_accepted,2026-11-18

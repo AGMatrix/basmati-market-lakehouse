@@ -9,7 +9,8 @@ dashboard current every day with the same code, on a smaller slice of the data:
   3. lite lake: keep rice + basmati-candidate rows (LITE_ROWS) in a DuckDB file
               (lite/lite_lake.duckdb) that stands in for the Iceberg catalog
   4. dbt build --target lite (same models, tests, contracts, snapshot) + warehouse gate
-  5. gate passed -> export the dashboard extract and upload it; save lake + warehouse
+  5. retrain the weekly price forecast (basmati.forecast) and backtest it
+  6. gate passed -> export the dashboard extract and upload it; save lake + warehouse
 
 Every S3 object is replaced with a single PUT, so readers see the old or the new file.
 
@@ -33,7 +34,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # (tests/test_lite.py fails if they drift apart), so the lite lake keeps every row the
 # basmati models and the unmapped-variety gate look at, plus all rice for the mandi tables.
 BASMATI_SIGNAL = (
-    r"basmati|basumati|basamti|bashmati|1121|1509|1718|1401|1847|1885|1886|1692|pusa|sugandh"
+    r"bas[aeiou]*h?m[aeiou]*t+h?[aeiou]|1121|1509|1718|1401|1847|1885|1886|1692|pusa|sugandh"
     r"|taraori|dehradun|\bd\.?b\.?\b|370|386|csr ?30"
 )
 LITE_ROWS = f"""
@@ -136,7 +137,9 @@ def run(env: dict[str, str] | None = None) -> dict:
     ]
     for r in results:
         print(f"{r.day}  rows={r.rows:>6}  source={r.source}  changed={r.changed}")
-    changed = [r.day for r in results if r.changed]
+    # LITE_FORCE=1 rebuilds every checked day from the raw zone, e.g. after re-seeding.
+    force = env.get("LITE_FORCE") == "1"
+    changed = [r.day for r in results if r.changed or (force and r.rows)]
     metrics = {"checked_days": len(results), "changed_days": [d.isoformat() for d in changed]}
     if not changed:
         print("No new or revised days; nothing to publish.")
@@ -167,7 +170,13 @@ def run(env: dict[str, str] | None = None) -> dict:
     if not gate.success:
         raise SystemExit("warehouse gate failed: nothing published (see the report above)")
 
-    # 5. publish: extract for the app, then the state the next run builds on
+    # 5. retrain the price forecast on the refreshed warehouse (writes ml.* tables)
+    from basmati.forecast import run as run_forecast
+
+    metrics["forecast"] = run_forecast(str(warehouse))
+    print("forecast", metrics["forecast"])
+
+    # 6. publish: extract for the app, then the state the next run builds on
     extract = work / "basmati_demo.duckdb"
     metrics["extract_rows"] = export_extract(warehouse, extract)
     s3.upload_file(str(extract), bucket, env.get("SERVING_S3_KEY") or DEFAULT_KEY)

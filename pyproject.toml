@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "requests[socks]>=2.32",
     "boto3>=1.40",
+    "scikit-learn>=1.9.1",
 ]
 
 # Dependency groups (PEP 735): installed for local dev and CI, never shipped as package deps.

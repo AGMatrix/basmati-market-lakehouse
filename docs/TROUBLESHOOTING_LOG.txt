@@ -835,6 +835,90 @@ LESSON
   - A chart that invents a crash is worse than one with a visible gap.
 
 
+#32  Live dashboard crashed: "CatalogException" (table not found)
+----------------------------------------------------------------------------
+WHAT FAILED
+  Right after I pushed new dashboard code, the live site showed a red error box:
+  _duckdb.CatalogException at the "where to buy" query.
+
+WHY
+  Two things change independently: the CODE (pushed to GitHub, redeployed in a minute)
+  and the DATA FILE (downloaded from S3, cached by the app for an hour). The new code
+  read a new table (dim_commodity) that only the new data file has, but the app was
+  still using the old file from its cache. New code plus old data = crash.
+
+FIX
+  - The app asks S3 for the file's version (its ETag, a fingerprint that changes with
+    every upload) every 5 minutes, a cheap "HEAD" request. The download is cached per
+    version, so a new upload is picked up within 5 minutes, not an hour.
+  - After downloading, the app checks that every table it needs exists. If not, it uses
+    the committed snapshot instead of crashing.
+
+LESSON
+  When code and data deploy separately, either can be "newer". Version your data, check
+  its shape (schema) before use, and have a safe fallback.
+
+
+#33  The quality gate missed 18,000 basmati reports ("Basumathi")
+----------------------------------------------------------------------------
+WHAT FAILED
+  Nothing crashed. While building the forecast I noticed a series called
+  "Rice Basumathi" (median 8,000 Rs/quintal, clearly basmati) being treated as
+  ordinary rice.
+
+WHY
+  The gate finds possible basmati names with a list of spellings: basmati, basumati,
+  basamti... "Basumathi" has an extra "h", so it matched none of them. Those rows were
+  never flagged for review: 16,931 under Paddy(Dhan)(Common) and 1,211 under Rice.
+  A list of known misspellings can never be complete.
+
+FIX
+  Replaced the list with a pattern that describes the word's shape:
+    bas[aeiou]*h?m[aeiou]*t+h?[aeiou]
+  i.e. "bas", any vowels, optional h, "m", vowels, one or more t, optional h, a vowel.
+  It matches basmati, basumati, basumathi, basmathi, basamti, bashmati, basmatti and
+  "non basmti", but not lookalikes such as "bastar" or "basil". The gate then
+  correctly FAILED with 3 new names. The LLM suggested mappings, I checked the evidence
+  (in Madhya Pradesh the "Common" Basumathi paddy trades at 3,140 vs 3,200 for the
+  already-approved basmati one, and ordinary paddy at 1,940-2,500), and the user
+  approved all 3. Basmati rows went from 138,044 to 156,186.
+  The same pattern is used to filter the GitHub job's data, and a test fails if the two
+  copies ever differ.
+
+LESSON
+  - A quality check can only catch what it is designed to look for. Silent misses are
+    the dangerous kind: look at the data from new angles (here, building a model).
+  - Prefer patterns over lists of known variants; test them against both the variants
+    and lookalikes.
+
+
+#34  Mac disk full (179 MB free): publish failed half-way
+----------------------------------------------------------------------------
+WHAT FAILED
+  The warehouse build's publish step (copying the 4.6 GB warehouse to the serving copy)
+  failed, leaving a 2.1 GB partial file. Deleting that file did not free any space.
+
+WHY
+  - The disk had only ~2 GB free; the copy needs 4.7 GB.
+  - On macOS and Linux, deleting a file only removes its NAME. The space is freed when
+    the last program that has it open closes it. `lsof +L1` lists such "deleted but
+    open" files. There were two:
+      * an older 4.7 GB serving copy, still open in the local Streamlit dashboard I had
+        started earlier. The publish step had replaced it, but Streamlit held the old one.
+      * the 2.1 GB partial file, held open by the Docker VM's file-sharing process.
+
+FIX
+  Stopped the local dashboard (+4.6 GB) and restarted the Docker VM (13 GB free in the
+  end). The publish step now deletes any leftover partial file, checks free space first
+  and fails with a clear "need X GB, Y GB free" message, and removes its partial file if
+  the copy fails.
+
+LESSON
+  - "Deleted but still open" files keep using disk; `lsof +L1` finds them.
+  - Check resources before a big operation, and clean up after a failed one.
+  - Long-running processes (dashboards, servers) hold old files open.
+
+
 =============================================================================
 STILL OPEN (not fixed yet)
 =============================================================================

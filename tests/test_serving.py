@@ -36,8 +36,8 @@ def test_export_keeps_basmati_and_rice_rows_and_their_markets(tmp_path):
     src, out = tmp_path / "w.duckdb", tmp_path / "x.duckdb"
     _warehouse(src)
     counts = export_extract(src, out)
-    assert counts["fct_daily_price"] == 2  # basmati paddy + non-basmati rice, not onion
-    assert counts["dim_market"] == 2  # only markets that have those rows
+    assert counts["marts.fct_daily_price"] == 2  # basmati paddy + non-basmati rice, not onion
+    assert counts["marts.dim_market"] == 2  # only markets that have those rows
     assert not out.with_suffix(".tmp").exists()  # written to a temp name, then renamed
 
 

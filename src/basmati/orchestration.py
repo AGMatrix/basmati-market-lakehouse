@@ -28,6 +28,17 @@ def publish_serving_copy(db_path: Path) -> Path:
     """
     serving = db_path.with_name("warehouse_serving.duckdb")
     tmp = serving.with_suffix(".duckdb.tmp")
-    shutil.copyfile(db_path, tmp)
+    tmp.unlink(missing_ok=True)  # leftover from an interrupted copy
+    # The copy needs the file's full size free; on a full disk it would fail half-way and
+    # leave a multi-GB partial file. Check first and fail with a clear message instead.
+    need, free = db_path.stat().st_size, shutil.disk_usage(db_path.parent).free
+    if free < need * 1.1:
+        raise OSError(f"not enough disk space to publish: need {need / 1e9:.1f} GB, "
+                      f"{free / 1e9:.1f} GB free")  # fmt: skip
+    try:
+        shutil.copyfile(db_path, tmp)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, serving)
     return serving

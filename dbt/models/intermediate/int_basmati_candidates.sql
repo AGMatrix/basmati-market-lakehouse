@@ -1,6 +1,7 @@
 -- Every raw (commodity, variety) pair that might be basmati, with whether it is mapped yet.
 -- A pair is a candidate if the commodity says basmati, or it is a rice/paddy commodity whose
--- variety name carries a basmati signal (the word, a common misspelling, or a Pusa Basmati variety number).
+-- variety name carries a basmati signal (the word in any common spelling - basumathi, basamti,
+-- bashmati, basmatti... - or a Pusa Basmati variety number).
 -- Unmapped candidates are what scripts/variety_mapping.py sends to the LLM, and what the
 -- quality gate fails on.
 with prices as (
@@ -19,7 +20,7 @@ pairs as (
     where regexp_matches(lower(commodity), 'basmati')
        or regexp_matches(lower(commodity), 'paddy|rice|dhan') and regexp_matches(
             lower(raw_variety),
-            'basmati|basumati|basamti|bashmati|1121|1509|1718|1401|1847|1885|1886|1692|pusa|sugandh|taraori|dehradun|\bd\.?b\.?\b|370|386|csr ?30'
+            'bas[aeiou]*h?m[aeiou]*t+h?[aeiou]|1121|1509|1718|1401|1847|1885|1886|1692|pusa|sugandh|taraori|dehradun|\bd\.?b\.?\b|370|386|csr ?30'
           )
     group by commodity, raw_variety
 )

@@ -469,6 +469,84 @@ else:
         hide_index=True, width="stretch",
     )  # fmt: skip
 
+# --- 5. price forecast -----------------------------------------------------------------------
+has_ml = not query(
+    "select 1 from information_schema.tables where table_schema = 'ml' "
+    "and table_name = 'price_forecast'"
+).empty
+if has_ml:
+    st.subheader("Price forecast: next 4 weeks")
+    fc = query("select * from ml.price_forecast")
+    bt = query("select * from ml.backtest_metrics")
+    f1, f2 = st.columns(2)
+    series_list = sorted(fc["series"].unique())
+    pick_series = f1.selectbox(
+        "Series", series_list,
+        index=series_list.index("Rice Common") if "Rice Common" in series_list else 0,
+    )  # fmt: skip
+    regions = sorted(fc.loc[fc["series"] == pick_series, "region"].unique(),
+                     key=lambda r: (r != "All India", r))  # fmt: skip
+    pick_region = f2.selectbox("Region", regions)
+    one = fc[(fc["series"] == pick_series) & (fc["region"] == pick_region)].sort_values("h")
+    esc = lambda v: v.replace("'", "''")  # noqa: E731 (values come from the forecast table)
+    region_sql = "" if pick_region == "All India" else f"and m.state = '{esc(pick_region)}'"
+    hist = query(
+        f"""
+        select date_trunc('week', f.arrival_date)::date as week, median(f.modal_price) as price
+        from marts.fct_daily_price f
+        join marts.dim_commodity c using (commodity_id)
+        left join marts.dim_variety v using (variety_id)
+        join marts.dim_market m using (market_version_id)
+        where (case when v.is_basmati then v.variety_group || ' ' || v.form
+                    when lower(c.commodity) = 'rice' then 'Rice ' || f.raw_variety end)
+              = '{esc(pick_series)}' {region_sql}
+          and f.arrival_date > (select max(arrival_date) from marts.fct_daily_price) - 182
+        group by 1 order by 1
+        """  # noqa: S608
+    )
+    hist["week"] = pd.to_datetime(hist["week"])
+    one = one.assign(target_week=pd.to_datetime(one["target_week"]))
+    start_pt = pd.DataFrame({"target_week": [pd.to_datetime(one["week"].iloc[0])],
+                             "q10": one["price"].iloc[0], "q50": one["price"].iloc[0],
+                             "q90": one["price"].iloc[0]})  # fmt: skip
+    path = pd.concat([start_pt, one[["target_week", "q10", "q50", "q90"]]], ignore_index=True)
+    color = PALETTE[mode][0]
+    band = alt.Chart(path).mark_area(opacity=0.18, color=color).encode(
+        x=alt.X("target_week:T", title=None),
+        y=alt.Y("q10:Q", title="Rs per quintal", scale=alt.Scale(zero=False)), y2="q90:Q",
+        tooltip=[alt.Tooltip("target_week:T", title="Week of"),
+                 alt.Tooltip("q10:Q", title="Low (10%)", format=",.0f"),
+                 alt.Tooltip("q50:Q", title="Forecast", format=",.0f"),
+                 alt.Tooltip("q90:Q", title="High (90%)", format=",.0f")],
+    )  # fmt: skip
+    mid = (
+        alt.Chart(path)
+        .mark_line(color=color, strokeDash=[6, 4], strokeWidth=2)
+        .encode(x="target_week:T", y="q50:Q")
+    )
+    actual = alt.Chart(hist).mark_line(color=color, strokeWidth=2).encode(
+        x="week:T", y="price:Q",
+        tooltip=[alt.Tooltip("week:T", title="Week of"),
+                 alt.Tooltip("price:Q", title="Actual", format=",.0f")],
+    )  # fmt: skip
+    st.altair_chart(style(alt.layer(band, actual, mid).properties(height=300)), width="stretch")
+    last = one.iloc[-1]
+    st.markdown(
+        f"**In 4 weeks ({last['target_week']:%d %b %Y}):** about **{last['q50']:,.0f}** Rs/quintal "
+        f"(80% range {last['q10']:,.0f} to {last['q90']:,.0f}), from {last['price']:,.0f} now."
+    )
+    allh = bt[bt["h"] == "all"].set_index("model")["mape_pct"]
+    seasonal = allh["last year's change"]
+    st.caption(
+        f"How good is it? Tested on {pd.to_datetime(bt['test_start'].iloc[0]):%b %Y} onward "
+        f"(data the model never saw): average error {allh['model']:.1f}% vs "
+        f"{allh['no change']:.1f}% for 'price stays the same' and "
+        f"{seasonal:.1f}% for 'same change as last year'; the shaded 80% "
+        f"range contained the real price {100 * bt['coverage_80'].iloc[0]:.0f}% of the time. "
+        "Model: gradient boosting on price history, seasonality, mandi activity and the export "
+        "policy regime; retrained every day. A forecast, not a guarantee."
+    )
+
 st.caption(
     "Exports by destination are not shown: the APEDA / DGCI&S monthly-by-country source is "
     "not yet verified (docs/STEP0_SOURCES.md)."

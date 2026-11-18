@@ -43,10 +43,20 @@ def export_extract(src: Path, out: Path) -> dict[str, int]:
     """)
     for t in COPIED_TABLES:
         con.execute(f"CREATE TABLE marts.{t} AS SELECT * FROM src.marts.{t}")  # noqa: S608
+    # Forecasts and their backtest, when the warehouse has them (written by basmati.forecast).
+    ml = {t for (t,) in con.sql(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_catalog = 'src' AND table_schema = 'ml'"
+    ).fetchall()}  # fmt: skip
+    for t in sorted(ml & {"price_forecast", "backtest_metrics"}):
+        con.execute("CREATE SCHEMA IF NOT EXISTS ml")
+        con.execute(f"CREATE TABLE ml.{t} AS SELECT * FROM src.ml.{t}")  # noqa: S608
     con.execute("DETACH src")
     counts = {
-        t: con.sql(f"SELECT count(*) FROM marts.{t}").fetchone()[0]  # noqa: S608
-        for (t,) in con.sql("SELECT table_name FROM information_schema.tables").fetchall()
+        f"{sch}.{t}": con.sql(f"SELECT count(*) FROM {sch}.{t}").fetchone()[0]  # noqa: S608
+        for sch, t in con.sql(
+            "SELECT table_schema, table_name FROM information_schema.tables"
+        ).fetchall()
     }
     con.close()
     os.replace(tmp, out)  # readers never see a half-written file
