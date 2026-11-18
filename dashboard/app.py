@@ -32,22 +32,48 @@ def s3_config() -> dict | None:
         return None
 
 
-@st.cache_resource(ttl=3600)  # re-download at most hourly; the pipeline updates it daily
-def fetch_hosted(cfg: dict) -> Path:
+# Tables this page reads; a file without all of them (e.g. an older extract) is rejected.
+REQUIRED = {"fct_daily_price", "dim_market", "dim_variety", "dim_commodity",
+            "dim_policy_event", "mart_basmati_price_vs_policy"}  # fmt: skip
+
+
+@st.cache_resource
+def s3_client(cfg: dict):
     import boto3
 
-    s3 = boto3.client(
+    return boto3.client(
         "s3",
         region_name=cfg.get("region", "us-east-1"),
         aws_access_key_id=cfg["aws_access_key_id"],
         aws_secret_access_key=cfg["aws_secret_access_key"],
     )
-    tmp = HOSTED.with_suffix(".tmp")
-    s3.download_file(cfg["bucket"], cfg.get("key", "serving/basmati_demo.duckdb"), str(tmp))
-    with duckdb.connect(str(tmp), read_only=True) as con:  # reject a corrupt/partial file
-        con.sql("select count(*) from marts.fct_daily_price").fetchone()
-    os.replace(tmp, HOSTED)
-    return HOSTED
+
+
+@st.cache_data(ttl=300)
+def s3_version(cfg: dict) -> str:
+    """The object's ETag (changes with every upload): a cheap HEAD request every 5 minutes."""
+    key = cfg.get("key", "serving/basmati_demo.duckdb")
+    return s3_client(cfg).head_object(Bucket=cfg["bucket"], Key=key)["ETag"].strip('"')
+
+
+@st.cache_resource(max_entries=1)  # keyed on the ETag: a new upload means a new download
+def fetch_hosted(cfg: dict, version: str) -> Path:
+    path = HOSTED.with_name(f"basmati_hosted_{version[:16]}.duckdb")
+    tmp = path.with_suffix(".tmp")
+    s3_client(cfg).download_file(
+        cfg["bucket"], cfg.get("key", "serving/basmati_demo.duckdb"), str(tmp)
+    )
+    with duckdb.connect(str(tmp), read_only=True) as con:  # reject corrupt or older files
+        tables = {t for (t,) in con.sql(
+            "select table_name from information_schema.tables where table_schema = 'marts'"
+        ).fetchall()}  # fmt: skip
+        if missing := REQUIRED - tables:
+            raise ValueError(f"extract is missing tables: {sorted(missing)}")
+    os.replace(tmp, path)
+    for old in HOSTED.parent.glob("basmati_hosted_*.duckdb"):  # drop earlier versions
+        if old != path:
+            old.unlink(missing_ok=True)
+    return path
 
 
 def pick_db() -> Path:
@@ -60,7 +86,7 @@ def pick_db() -> Path:
         print("data source: committed snapshot (no [s3] secrets)")
         return DEMO
     try:
-        path = fetch_hosted(cfg)
+        path = fetch_hosted(cfg, s3_version(cfg))
         print(f"data source: s3://{cfg['bucket']}/{cfg.get('key', '')}")
         return path
     except Exception as e:  # noqa: BLE001 (any S3 problem: show the committed snapshot)
